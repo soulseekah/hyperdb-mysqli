@@ -1,6 +1,7 @@
 <?php
 
 define('OBJECT', 'OBJECT', true);
+define('OBJECT_K', 'OBJECT_K', false);
 define('ARRAY_A', 'ARRAY_A', false);
 define('ARRAY_N', 'ARRAY_N', false);
 
@@ -8,17 +9,14 @@ if (!defined('SAVEQUERIES'))
 	define('SAVEQUERIES', true);
 
 class wpdb {
-	var $remote_cushion = 10;
-	var $max_connections = 10;
-	var $srtm = false;
 	var $show_errors = true;
+	var $suppress_errors = false;
+	var $last_error = '';
 	var $num_queries = 0;
 	var $last_query;
-	var $last_table;
 	var $col_info;
 	var $queries;
-	var $connection_array;
-	var $current_host;
+	var $prefix = '';
 
 	// Our tables
 	var $posts;
@@ -27,12 +25,24 @@ class wpdb {
 	var $post2cat;
 	var $comments;
 	var $links;
-	var $link2cat;
 	var $options;
 	var $postmeta;
-
+	var $usermeta;
+	var $terms;
+	var $term_taxonomy;
+	var $term_relationships;
+	var $tables = array('users', 'usermeta', 'posts', 'categories', 'post2cat', 'comments', 'links', 'link2cat', 'options',
+			'postmeta', 'terms', 'term_taxonomy', 'term_relationships');
 	var $charset;
 	var $collate;
+
+	// HyperDB
+	var $multiple_db = false;
+	var $max_connections = 10;
+	var $srtm = false;
+	var $last_table;
+	var $connection_array;
+	var $current_host;
 
 	/**
 	 * Connects to the database server and selects a database
@@ -48,8 +58,13 @@ class wpdb {
 	function __construct($dbuser, $dbpassword, $dbname, $dbhost) {
 		register_shutdown_function(array(&$this, "__destruct"));
 
-		if( defined( "WP_USE_MULTIPLE_DB" ) && CONSTANT( "WP_USE_MULTIPLE_DB" ) == true )
+		if ( defined('WP_DEBUG') and WP_DEBUG == true )
+			$this->show_errors();
+
+		if( defined( "WP_USE_MULTIPLE_DB" ) && CONSTANT( "WP_USE_MULTIPLE_DB" ) == true ) {
+			$this->multiple_db = true;
 			return true;
+		}
 
 		if ( defined('DB_CHARSET') )
 			$this->charset = DB_CHARSET;
@@ -59,9 +74,10 @@ class wpdb {
 
 		$this->dbh = @mysql_connect($dbhost, $dbuser, $dbpassword);
 		if (!$this->dbh) {
-			error_log( date( "Y-m-d H:i:s" ) . " Can't connect " . $dbhost." - $dbuser - $dbpassword\n\n", 3, "/tmp/mysql.txt" );
+			$this->print_error( "Can't connect " . $dbhost );
 		}
 
+		// TODO: collation unreachable in multi-db mode!
 		if ( !empty($this->charset) && version_compare(mysql_get_server_info(), '4.1.0', '>=') )
  			$this->query("SET NAMES '$this->charset'");
 
@@ -72,11 +88,31 @@ class wpdb {
 		return true;	
 	}
 
+	function set_prefix($prefix) {
+		if ( preg_match('|[^a-z0-9_]|i', $prefix) )
+			return new WP_Error('invalid_db_prefix', 'Invalid database prefix'); // No gettext here
+
+		$old_prefix = $this->prefix;
+		$this->prefix = $prefix;
+
+		foreach ( $this->tables as $table )
+			$this->$table = $this->prefix . $table;
+
+		if ( defined('CUSTOM_USER_TABLE') )
+			$this->users = CUSTOM_USER_TABLE;
+
+		if ( defined('CUSTOM_USER_META_TABLE') )
+			$this->usermeta = CUSTOM_USER_META_TABLE;
+
+		return $old_prefix;
+	}
+
+	/**
+	 * Selects a database using the current class's $this->dbh
+	 * @param string $db name
+	 */
 	function select($db, &$dbh) {
-		if (!@mysql_select_db($db, $dbh)) {
-			//error_log( date( "Y-m-d H:i:s" ) . " Can't select $db - ".mysql_error( $dbh )."\n\n", 3, "/tmp/mysql.txt" );
-			$this->handle_error_connecting( $dbh, array( "db" => $db ) );
-		}
+		return mysql_select_db($db, $dbh);
 	}
 
 	/**
@@ -86,155 +122,207 @@ class wpdb {
 	 * @return string query safe string
 	 */
 	function escape($string) {
-		return addslashes( $string ); // Disable rest for now, causing problems
+		return addslashes( $string );
+		// Disable rest for now, causing problems
+		/*
 		if( !$this->dbh || version_compare( phpversion(), '4.3.0' ) == '-1' )
 			return mysql_escape_string( $string );
 		else
 			return mysql_real_escape_string( $string, $this->dbh );
+		*/
 	}
 
-	// ==================================================================
-	//	Print SQL/DB error.
+	/**
+	 * Escapes content by reference for insertion into the database, for security
+	 * @param string $s
+	 */
+	function escape_by_ref(&$s) {
+		$s = $this->escape($s);
+	}
 
+	/**
+	 * Prepares a SQL query for safe use, using sprintf() syntax
+	 */
+	function prepare($args=NULL) {
+		if ( NULL === $args )
+			return;
+		$args = func_get_args();
+		$query = array_shift($args);
+		$query = str_replace("'%s'", '%s', $query); // in case someone mistakenly already singlequoted it
+		$query = str_replace('"%s"', '%s', $query); // doublequote unquoting
+		$query = str_replace('%s', "'%s'", $query); // quote the strings
+		array_walk($args, array(&$this, 'escape_by_ref'));
+		return @vsprintf($query, $args);
+	}
+
+	/**
+	 * Print SQL/DB error
+	 *
+	 * @param string $str Error string
+	 */
 	function print_error($str = '') {
 		global $EZSQL_ERROR;
-		if (!$str) $str = mysql_error();
+
+		if ( empty($str) )
+			$str = $this->last_error;
+
 		$EZSQL_ERROR[] = array ('query' => $this->last_query, 'error_str' => $str);
-		$this->last_error = $str;
 
-		// Is error output turned on or not..
-		if ( $this->show_errors ) {
-			// If there is an error then take note of it
-			$msg = "Mysql Error on http://" . $_SERVER[ 'HTTP_HOST' ] . $_SERVER[ 'REQUEST_URI' ] . "!!!!Error: [" . $str . "]!!!!SQL: " . $this->last_query . "!!!!Request Data: ";
-			error_log( date( "Y-m-d H:i:s" ) . " " . $msg."\n\n", 3, "/tmp/mysql.txt" );
-		} else {
+		if ( $this->suppress_errors )
 			return false;
-		}
+
+		$error_str = "WordPress database error $str for query $this->last_query";
+
+		if ( $caller = $this->get_caller() )
+			$error_str .= " made by $caller";
+
+		$log_file = @ini_get('error_log');
+		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) )
+			@error_log($error_str, 0);
+
+		// Is error output turned on or not
+		if ( !$this->show_errors )
+			return false;
+
+		$str = htmlspecialchars($str, ENT_QUOTES);
+		$query = htmlspecialchars($this->last_query, ENT_QUOTES);
+
+		// If there is an error then take note of it
+		print "<div id='error'>
+		<p class='wpdberror'><strong>WordPress database error:</strong> [$str]<br />
+		<code>$query</code></p>
+		</div>";
 	}
 
-	// ==================================================================
-	//	Turn error handling on or off..
-
-	function show_errors() {
-		$this->show_errors = true;
+	/**
+	 * Turn error output on or off
+	 *
+	 * @param bool $show
+	 * @return bool previous setting
+	 */
+	function show_errors( $show = true ) {
+		$errors = $this->show_errors;
+		$this->show_errors = $show;
+		return $errors;
 	}
 
+	/**
+	 * Turn error output off
+	 *
+	 * @return bool previous setting of show_errors
+	 */
 	function hide_errors() {
-		$this->show_errors = false;
+		return $this->show_errors(false);
 	}
 
-	// ==================================================================
-	//	Kill cached query results
+	/**
+	 * Turn error logging on or off
+	 *
+	 * @param bool $suppress
+	 * @return bool previous setting
+	 */
+	function suppress_errors( $suppress = true ) {
+		$errors = $this->suppress_errors;
+		$this->suppress_errors = $suppress;
+		return $errors;
+	}
 
+	/**
+	 * Kill cached query results
+	 */
 	function flush() {
 		$this->last_result = array();
 		$this->col_info = null;
 		$this->last_query = null;
+		$this->last_error = '';
 	}
 
+	/**
+	 * Find the first table name referenced in a query
+	 *
+	 * @param string query
+	 * @return string table
+	 */
 	function get_table_from_query ( $q ) {
-		If( substr( $q, -1 ) == ';' )
-			$q = substr( $q, 0, -1 );
-		if ( preg_match('/^\s*SELECT.*?\s+FROM\s+`?(\w+)`?\s*/is', $q, $maybe) )
+		// Remove characters that can legally trail the table name
+		rtrim($q, ';/-#');
+
+		// Quickly match most common queries
+		if ( preg_match('/^\s*(?:'
+				. 'SELECT.*?\s+FROM'
+				. '|INSERT(?: IGNORE)?(?: INTO)?'
+				. '|REPLACE(?: INTO)?'
+				. '|UPDATE(?: IGNORE)?'
+				. '|DELETE(?: IGNORE)?(?: FROM)?'
+				. ')\s+`?(\w+)`?/is', $q, $maybe) )
 			return $maybe[1];
-		if ( preg_match('/^\s*UPDATE IGNORE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*UPDATE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*INSERT INTO\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*REPLACE INTO\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*INSERT IGNORE INTO\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*REPLACE INTO\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*DELETE\s+FROM\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*(?:TRUNCATE|RENAME|OPTIMIZE|LOCK|UNLOCK)\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^SHOW TABLE STATUS (LIKE|FROM) \'?`?(\w+)\'?`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^SHOW INDEX FROM `?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*SHOW CREATE TABLE `?(\w+?)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^SHOW CREATE TABLE (wp_[a-z0-9_]+)/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*CREATE\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*DROP\s+TABLE\s+IF\s+EXISTS\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*DROP\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*DESCRIBE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*ALTER\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
+
+		// Refer to the previous query
 		if ( preg_match('/^\s*SELECT.*?\s+FOUND_ROWS\(\)/is', $q) )
 			return $this->last_table;
 
+		// Big pattern for the rest of the table-related queries in MySQL 5.0
+		if ( preg_match(str_replace(' ', '\s+', '/^\s*(?:'
+				. '(?:EXPLAIN (?:EXTENDED )?)?SELECT.*?\s+FROM'
+				. '|INSERT(?: LOW_PRIORITY| DELAYED| HIGH_PRIORITY)?(?: IGNORE)?(?: INTO)?'
+				. '|REPLACE(?: LOW_PRIORITY| DELAYED)?(?: INTO)?'
+				. '|UPDATE(?: LOW_PRIORITY)?(?: IGNORE)?'
+				. '|DELETE(?: LOW_PRIORITY| QUICK| IGNORE)*(?: FROM)?'
+				. '|DESCRIBE|DESC|EXPLAIN|HANDLER'
+				. '|(?:LOCK|UNLOCK) TABLE(?:S)?'
+				. '|(?:RENAME|OPTIMIZE|BACKUP|RESTORE|CHECK|CHECKSUM|ANALYZE|OPTIMIZE|REPAIR).* TABLE'
+				. '|TRUNCATE(?: TABLE)?'
+				. '|CREATE(?: TEMPORARY)? TABLE(?: IF NOT EXISTS)?'
+				. '|ALTER(?: IGNORE)?'
+				. '|DROP TABLE(?: IF EXISTS)?'
+				. '|CREATE(?: \w+)? INDEX.* ON'
+				. '|DROP INDEX.* ON'
+				. '|LOAD DATA.*INFILE.*INTO TABLE'
+				. '|(?:GRANT|REVOKE).*ON TABLE)'
+				. 'SHOW (?:.*FROM|.*TABLE|'
+				. ')\s+`?(\w+)`?/is'), $q, $maybe) )
+			return $maybe[1];
+
 		return '';
 	}
-	
+
+	/**
+	 * Determine the likelihood that this query could alter anything
+	 *
+	 * @param string query
+	 * @return bool
+	 */
 	function is_write_query( $q ) {
-		If( substr( $q, -1 ) == ';' )
-			$q = substr( $q, 0, -1 );
-		if ( preg_match('/^\s*SELECT.*?\s+FROM\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return false;
-		if ( preg_match('/^\s*UPDATE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*INSERT INTO\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*REPLACE INTO\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*INSERT IGNORE INTO\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*DELETE\s+FROM\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*OPTIMIZE\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^SHOW TABLE STATUS (LIKE|FROM) \'?`?(\w+)\'?`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*CREATE\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*SHOW CREATE TABLE `?(\w+?)`?.*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*DROP\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*DROP\s+TABLE\s+IF\s+EXISTS\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return true;
-		if ( preg_match('/^\s*ALTER\s+TABLE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*DESCRIBE\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*SHOW\s+INDEX\s+FROM\s+`?(\w+)`?\s*/is', $q, $maybe) )
-			return $maybe[1];
-		if ( preg_match('/^\s*SELECT.*?\s+FOUND_ROWS\(\)/is', $q) )
-			return false;
-		if ( preg_match('/^\s*RENAME\s+TABLE\s+/i', $q) )
-			return true;
-		if ( preg_match('/^\s*TRUNCATE\s|TABLE\s+/i', $q) )
-			return true;
-		return true;
+		// Quick and dirty: only send SELECT statements to slaves
+		$word = strtoupper( substr( trim( $q ), 0, 6 ) );
+		return 'SELECT' != $word;
 	}
 
+	/**
+	 * Set a flag to prevent reading from slaves which might be lagging after a write
+	 */
 	function send_reads_to_masters() {
 		$this->srtm = true;
 	}
 
+	/**
+	 * Get the dataset and partition from the table name. E.g.:
+	 * wp_ds_{$dataset}_{$partition}_tablename where $partition is ctype_digit
+	 * wp_{$dataset}_{$hash}_tablename where $hash is 1-3 chars of ctype_xdigit
+	 *
+	 * @param unknown_type $table
+	 * @return unknown
+	 */
 	function get_ds_part_from_table($table) {
-		global $wpmuBaseTablePrefix, $db_servers;
+		global $db_servers;
 
-		if ( substr( $table, 0, strlen( $wpmuBaseTablePrefix ) ) != $wpmuBaseTablePrefix ) {
+		if ( substr( $table, 0, strlen( $this->prefix ) ) != $this->prefix ) {
 			return false;
-		} else if ( preg_match('/^' . $wpmuBaseTablePrefix . 'ds_([a-z0-9]+)_([0-9]+)_/', $table, $matches) ) {
+		} else if ( preg_match('/^' . $this->prefix . 'ds_([a-z0-9]+)_([0-9]+)_/', $table, $matches) ) {
 		// e.g. wp_ds_{$dataset}_{$partition}_stuff
 			$dataset = $matches[1];
 			$partition = $hash = $matches[2];
-		} else if ( preg_match('/^' . $wpmuBaseTablePrefix . '([a-z0-9]+)_([0-9a-f]+)_/', $table, $matches) ) {
+		} else if ( preg_match('/^' . $this->prefix . '([a-z0-9]+)_([0-9a-f]{1,3})_/', $table, $matches) ) {
 		// e.g. wp_{$dataset}_{$padhexmod}_stuff
 			$dataset = $matches[1];
 			$hash = $matches[2];
@@ -248,37 +336,41 @@ class wpdb {
 		return compact('dataset', 'hash', 'partition');
 	}
 
+	/**
+	 * Figure out which database server should handle the query, and connect to it.
+	 *
+	 * @param string query
+	 * @return resource mysql database connection
+	 */
 	function &db_connect( $query = '' ) {
 		global $db_servers, $db_tables, $current_connection;
+
+		if ( ! $this->multiple_db )
+			return true;
 
 		if ( empty( $query ) )
 			return false;
 
-		$write = $this->srtm || $this->is_write_query( $query );
+		$write = $this->is_write_query( $query );
 		$table = $this->get_table_from_query( $query );
 		$this->last_table = $table;
 		$partition = 0;
 
-		if ( $ds_part = $this->get_ds_part_from_table($table) ) {
+		if ( is_array($db_tables) && array_key_exists($table, $db_tables) ) {
+			$dataset = $db_tables[$table];
+			$dbhname = "dbh_$dataset";
+		} else if ( $ds_part = $this->get_ds_part_from_table($table) ) {
 			extract( $ds_part, EXTR_OVERWRITE );
 			$dbhname = "dbh_{$dataset}_{$partition}";
 			$_server['name'] = "{$dataset}_$hash";
-		} else if ( array_key_exists($table, $db_tables) ) {
-			$dataset = $db_tables[$table];
-			$dbhname = "dbh_$dataset";
 		} else {
 			$dataset = 'global';
 			$dbhname = "dbh_global";
 		}
 
-		// Send reads to the master for a few seconds after a write to user db or global db.
-		// This ought to help with accidental post regressions and other replication issues.
-		if ( $write && $blog_id )
-			$this->srtm = true;
-		else if ( $write && ( $dataset == 'global' ) && ( $this->blogid > 1 ) )
-			$this->srtm = true;
-		else if ( $this->srtm )
-			$write = true;
+		// Send reads to the master after a write to cope with replication lag
+		if ( $write || $this->srtm )
+			$write = $this->srtm = true;
 
 		if ( $write ) {
 			$read_dbh = $dbhname . '_r';
@@ -298,16 +390,17 @@ class wpdb {
 				$this->open_connections[] = $dbhname;
 			}
 
-			// Using an existing connection where there may be multiple dbs, we should select the one we need here.
-			if ( isset($_server['name']) )
-				$this->select($_server['name'], $this->$dbhname);
-
-			$this->current_host = $this->dbh2host[$dbhname];
-
-			return $this->$dbhname;
+			// Using an existing connection, select the db we need and if that fails, disconnect and connect anew.
+			if ( ( isset($_server['name']) && $this->select($_server['name'], $this->$dbhname) ) ||
+					( isset($this->used_servers[$dbhname]['db']) && $this->select($this->used_servers[$dbhname]['db'], $this->$dbhname) ) ) {
+				$this->current_host = $this->dbh2host[$dbhname];
+				return $this->$dbhname;
+			} else {
+				$this->disconnect($dbhname);
+			}
 		}
 
-		if ( $write && defined( 'MASTER_DB_DEAD' ) ) { 
+		if ( $write && defined( "MASTER_DB_DEAD" ) ) {
 			die("We're updating the database, please try back in 5 minutes. If you are posting to your blog please hit the refresh button on your browser in a few minutes to post the data again. It will be posted as soon as the database is back online again.");
 		}
 
@@ -334,7 +427,7 @@ class wpdb {
 			$server_groups[$o][] = $server;
 		}
 
-		// Randomize each group and add its members to 
+		// Randomize each group and add its members to
 		$servers = array();
 		ksort($server_groups);
 		foreach ( $server_groups as $group ) {
@@ -343,13 +436,43 @@ class wpdb {
 			$servers = array_merge($servers, $group);
 		}
 
+		// at the following index # we have no choice but to connect
+		$max_server_index = count($servers) - 1;
+
 		// Connect to a database server
-		foreach ( $servers as $server ) {
+		foreach ( $servers as $server_index => $server ) {
 			$this->timer_start();
 
 			$host = $server['host'];
 
-			$this->$dbhname = @mysql_connect( $host, $server['user'], $server['password'] );
+			// make sure there's always a port #
+			$pieces = explode(':', $host);
+			if ( count($pieces) == 1 )
+				$pieces[1] = 3306;
+
+			// reduce the timeout if the host is on the lan
+			$mctime = 0.2; // Default
+			if ( strtolower(substr($pieces[0], -3)) == 'lan' )
+				$mctime = 0.05;
+
+			// connect if necessary or possible
+			if ( $write || $server_index == $max_server_index || $this->check_tcp_responsiveness($pieces[0],$pieces[1],$mctime) ) {
+				$this->$dbhname = false;
+				$try_count = 0;
+				while ( $this->$dbhname === false ) {
+					$try_count++;
+					$this->$dbhname = @mysql_connect( $host, $server['user'], $server['password'] );
+					if ( $try_count == 4 ) {
+						break;
+					} else {
+						if ( $this->$dbhname === false )
+							// Possibility of waiting up to 3 seconds!
+							usleep( (500000 * $try_count) );
+					}
+				}
+			} else {
+				$this->$dbhname = false;
+			}
 
 			$this->connections[] = "{$server['user']}@$host";
 
@@ -360,15 +483,31 @@ class wpdb {
 				$this->open_connections[] = $dbhname;
 				$this->dbh2host[$dbhname] = $host;
 				break;
+			} else {
+				$error_details = array (
+					'referrer' => "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}",
+					'host' => $host,
+					'error' => mysql_error(),
+					'errno' => mysql_errno(),
+					'tcp_responsive' => $this->tcp_responsive,
+				);
+				$msg = date( "Y-m-d H:i:s" ) . " Can't select $dbhname - ";
+				$msg .= "\n" . print_r($error_details, true);
+	
+				$this->print_error( $msg );
 			}
 		} // end foreach ( $servers as $server )
 
-		if ( $this->$dbhname == false || !is_resource($this->$dbhname) )
-			$this->handle_error_connecting( $dbhname, array( 'server' => $server, 'error' => mysql_error() ) );
-
-		$this->select( $server['name'], $this->$dbhname );
+		if ( ! $this->select( $server['name'], $this->$dbhname ) ) {
+			$server_for_log = $server;
+			unset($server_for_log['user']);
+			unset($server_for_log['password']);
+			return $this->handle_error_connecting($dbhname, array('query'=>$query, 'dbhname'=>$dbhname, 'server'=>$server_for_log, 'error'=>mysql_error()));
+		}
 
 		$this->last_used_server = array( "server" => $server['host'], "db" => $server['name'] );
+
+		$this->used_servers[$dbhname] = $this->last_used_server;
 
 		// Close current and prevent future read-only connections to the written cluster
 		if ( $write ) {
@@ -381,23 +520,36 @@ class wpdb {
 			$this->$read_dbh = & $this->$dbhname;
 		}
 
-		while ( count($this->open_connections) > $this->max_connections )
-			$this->disconnect(array_shift($this->open_connections));
+		while ( count($this->open_connections) > $this->max_connections ) {
+			$oldest_connection = array_shift($this->open_connections);
+			if ( $this->$oldest_connection != $this->$dbhname )
+				$this->disconnect($oldest_connection);
+		}
 
 		return $this->$dbhname;
 	}
 
+	/**
+	 * Disconnect and remove connection from open connections list
+	 *
+	 * @param string $dbhname
+	 */
 	function disconnect($dbhname) {
 		if ( $k = array_search($dbhname, $this->open_connections) )
 			unset($this->open_connections[$k]);
 
 		if ( is_resource($this->$dbhname) )
 			mysql_close($this->$dbhname);
+
+		unset($this->$dbhname);
 	}
 
-	// ==================================================================
-	//	Basic Query	- see docs for more detail
-
+	/**
+	 * Basic query. See docs for more details.
+	 *
+	 * @param string $query
+	 * @return int number of rows
+	 */
 	function query($query) {
 		global $current_connection;
 		// filter the query, if filters are available
@@ -408,7 +560,6 @@ class wpdb {
 		// initialise return
 		$return_val = 0;
 		$this->flush();
-		$this->last_error = '';
 
 		// Log how the function was called
 		$this->func_call = "\$db->query(\"$query\")";
@@ -416,31 +567,32 @@ class wpdb {
 		// Keep track of the last query for debug..
 		$this->last_query = $query;
 
-		$dbh =& $this->db_connect( $query );
+		if ( $this->multiple_db )
+			$this->dbh =& $this->db_connect( $query );
 
-		$this->timer_start();
+		if ( ! is_resource($this->dbh) )
+			return false;
 
-		$this->result = @mysql_query($query, $dbh);
+		if (SAVEQUERIES)
+			$this->timer_start();
+
+		$this->result = @mysql_query($query, $this->dbh);
 		++$this->num_queries;
-		if( defined( 'DO_BACKTRACE' ) )
-			$debug = debug_backtrace();
-		else
-			$debug = false;
-		$this->queries[] = array( $query . " <br /> connection: $current_connection", $this->timer_stop(), mysql_affected_rows($dbh), $this->current_host, microtime(), $debug );
 
-		// If there is an error then take note of it..
-		if( $dbh ) {
-			if ( mysql_error( $dbh ) ) {
-				$this->print_error( mysql_error( $dbh ));
-				return false;
-			}
+		if (SAVEQUERIES)
+			$this->queries[] = array( $query, $this->timer_stop(), $this->get_caller() );
+
+		// If there is an error then take note of it
+		if ( $this->last_error = mysql_error($this->dbh) ) {
+			$this->print_error($this->last_error);
+			return false;
 		}
 
 		if ( preg_match("/^\\s*(insert|delete|update|replace) /i",$query) ) {
-			$this->rows_affected = mysql_affected_rows($dbh);
+			$this->rows_affected = mysql_affected_rows($this->dbh);
 			// Take note of the insert_id
 			if ( preg_match("/^\\s*(insert|replace) /i",$query) ) {
-				$this->insert_id = mysql_insert_id($dbh);
+				$this->insert_id = mysql_insert_id($this->dbh);
 			}
 			// Return number of rows affected
 			$return_val = $this->rows_affected;
@@ -469,6 +621,39 @@ class wpdb {
 	}
 
 	/**
+	 * Insert an array of data into a table
+	 * @param string $table WARNING: not sanitized!
+	 * @param array $data should not already be SQL-escaped
+	 * @return mixed results of $this->query()
+	 */
+	function insert($table, $data) {
+		$data = add_magic_quotes($data);
+		$fields = array_keys($data);
+		return $this->query("INSERT INTO $table (`" . implode('`,`',$fields) . "`) VALUES ('".implode("','",$data)."')");
+	}
+
+	/**
+	 * Update a row in the table with an array of data
+	 * @param string $table WARNING: not sanitized!
+	 * @param array $data should not already be SQL-escaped
+	 * @param array $where a named array of WHERE column => value relationships.  Multiple member pairs will be joined with ANDs.  WARNING: the column names are not currently sanitized!
+	 * @return mixed results of $this->query()
+	 */
+	function update($table, $data, $where){
+		$data = add_magic_quotes($data);
+		$bits = $wheres = array();
+		foreach ( array_keys($data) as $k )
+			$bits[] = "`$k` = '$data[$k]'";
+
+		if ( is_array( $where ) )
+			foreach ( $where as $c => $v )
+				$wheres[] = "$c = '" . $this->escape( $v ) . "'";
+		else
+			return false;
+		return $this->query( "UPDATE $table SET " . implode( ', ', $bits ) . ' WHERE ' . implode( ' AND ', $wheres ) . ' LIMIT 1' );
+	}
+
+	/**
 	 * Get one variable from the database
 	 * @param string $query (can be null as well, for caching, see codex)
 	 * @param int $x = 0 row num to return
@@ -481,7 +666,7 @@ class wpdb {
 			$this->query($query);
 
 		// Extract var out of cached results based x,y vals
-		if ( $this->last_result[$y] ) {
+		if ( !empty( $this->last_result[$y] ) ) {
 			$values = array_values(get_object_vars($this->last_result[$y]));
 		}
 
@@ -500,7 +685,12 @@ class wpdb {
 		$this->func_call = "\$db->get_row(\"$query\",$output,$y)";
 		if ( $query )
 			$this->query($query);
-	
+		else
+			return null;
+
+		if ( !isset($this->last_result[$y]) )
+			return null;
+
 		if ( $output == OBJECT ) {
 			return $this->last_result[$y] ? $this->last_result[$y] : null;
 		} elseif ( $output == ARRAY_A ) {
@@ -522,6 +712,7 @@ class wpdb {
 		if ( $query )
 			$this->query($query);
 
+		$new_array = array();
 		// Extract the column values
 		for ( $i=0; $i < count($this->last_result); $i++ ) {
 			$new_array[$i] = $this->get_var(null, $x, $i);
@@ -532,7 +723,7 @@ class wpdb {
 	/**
 	 * Return an entire result set from the database
 	 * @param string $query (can also be null to pull from the cache)
-	 * @param string $output ARRAY_A | ARRAY_N | OBJECT
+	 * @param string $output ARRAY_A | ARRAY_N | OBJECT_K | OBJECT
 	 * @return mixed results
 	 */
 	function get_results($query = null, $output = OBJECT) {
@@ -540,23 +731,36 @@ class wpdb {
 
 		if ( $query )
 			$this->query($query);
+		else
+			return null;
 
-		// Send back array of objects. Each row is an object
 		if ( $output == OBJECT ) {
+			// Return an integer-keyed array of row objects
 			return $this->last_result;
+		} elseif ( $output == OBJECT_K ) {
+			// Return an array of row objects with keys from column 1
+			// (Duplicates are discarded)
+			foreach ( $this->last_result as $row ) {
+				$key = array_shift( get_object_vars( $row ) );
+				if ( !isset( $new_array[ $key ] ) )
+					$new_array[ $key ] = $row;
+			}
+			return $new_array;
 		} elseif ( $output == ARRAY_A || $output == ARRAY_N ) {
+			// Return an integer-keyed array of...
 			if ( $this->last_result ) {
 				$i = 0;
 				foreach( $this->last_result as $row ) {
-					$new_array[$i] = (array) $row;
 					if ( $output == ARRAY_N ) {
-						$new_array[$i] = array_values($new_array[$i]);
+						// ...integer-keyed row arrays
+						$new_array[$i] = array_values( get_object_vars( $row ) );
+					} else {
+						// ...column name-keyed row arrays
+						$new_array[$i] = get_object_vars( $row );
 					}
-					$i++;
+					++$i;
 				}
 				return $new_array;
-			} else {
-				return null;
 			}
 		}
 	}
@@ -596,7 +800,7 @@ class wpdb {
 	 * Stops the debugging timer
 	 * @return int total time spent on the query, in milliseconds
 	 */
-	function timer_stop($precision = 3) {
+	function timer_stop() {
 		$mtime = microtime();
 		$mtime = explode(' ', $mtime);
 		$time_end = $mtime[1] + $mtime[0];
@@ -609,59 +813,64 @@ class wpdb {
 	 * @param string $message
 	 */
 	function bail($message) { // Just wraps errors in a nice header and footer
-		if ( !$this->show_errors )
+		if ( !$this->show_errors ) {
+			if ( class_exists('WP_Error') )
+				$this->error = new WP_Error('500', $message);
+			else
+				$this->error = $message;
 			return false;
-	header( 'Content-Type: text/html; charset=utf-8');
-	echo <<<HEAD
-	<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-	<html xmlns="http://www.w3.org/1999/xhtml">
-	<head>
-		<title>WordPress &rsaquo; Error</title>
-		<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-		<style media="screen" type="text/css">
-		<!--
-		html {
-			background: #eee;
 		}
-		body {
-			background: #fff;
-			color: #000;
-			font-family: Georgia, "Times New Roman", Times, serif;
-			margin-left: 25%;
-			margin-right: 25%;
-			padding: .2em 2em;
-		}
+		wp_die($message);
+	}
 
-		h1 {
-			color: #006;
-			font-size: 18px;
-			font-weight: lighter;
-		}
+	/**
+	 * Checks wether of not the database version is high enough to support the features WordPress uses
+	 * @global $wp_version
+	 */
+	function check_database_version()
+	{
+		global $wp_version;
+		// Make sure the server has MySQL 4.0
+		$mysql_version = preg_replace('|[^0-9\.]|', '', @mysql_get_server_info($this->dbh));
+		if ( version_compare($mysql_version, '4.0.0', '<') )
+			return new WP_Error('database_version',sprintf(__('<strong>ERROR</strong>: WordPress %s requires MySQL 4.0.0 or higher'), $wp_version));
+	}
 
-		h2 {
-			font-size: 16px;
-		}
+	/**
+	 * This function is called when WordPress is generating the table schema to determine wether or not the current database
+	 * supports or needs the collation statements.
+	 */
+	function supports_collation()
+	{
+		return ( version_compare(mysql_get_server_info($this->dbh), '4.1.0', '>=') );
+	}
 
-		p, li, dt {
-			line-height: 140%;
-			padding-bottom: 2px;
-		}
+	/**
+	 * Get the name of the function that called wpdb.
+	 * @return string the name of the calling function
+	 */
+	function get_caller() {
+		// requires PHP 4.3+
+		if ( !is_callable('debug_backtrace') )
+			return '';
 
-		ul, ol {
-			padding: 5px 5px 5px 20px;
+		$bt = debug_backtrace();
+		$caller = '';
+
+		foreach ( $bt as $trace ) {
+			if ( @$trace['class'] == __CLASS__ )
+				continue;
+			elseif ( strtolower(@$trace['function']) == 'call_user_func_array' )
+				continue;
+			elseif ( strtolower(@$trace['function']) == 'apply_filters' )
+				continue;
+			elseif ( strtolower(@$trace['function']) == 'do_action' )
+				continue;
+
+			$caller = $trace['function'];
+			break;
 		}
-		#logo {
-			margin-bottom: 2em;
-		}
-		-->
-		</style>
-	</head>
-	<body>
-	<h1 id="logo"><img alt="WordPress" src="http://static.wordpress.org/logo.png" /></h1>
-HEAD;
-	echo $message;
-	echo "</body></html>";
-	die();
+		return $caller;
 	}
 
 	function handle_error_connecting( $dbhname, $details ) {
@@ -672,6 +881,42 @@ HEAD;
 		error_log( "$msg\n\n", 3, "/tmp/db-connect.txt" );
 	}
 
+	/**
+	 * Check the responsiveness of a tcp/ip daemon
+	 * @return (bool) true when $host:$post responds within $float_timeout seconds, else (bool) false
+	 */
+	function check_tcp_responsiveness($host, $port, $float_timeout) {
+		if ( 1 == 2 && function_exists('apc_store') ) {
+			$use_apc = true;
+			$apc_key = "{$host}{$port}";
+			$apc_ttl = 10;
+		} else {
+			$use_apc = false;
+		}
+		if ( $use_apc ) {
+			$cached_value=apc_fetch($apc_key);
+			switch ( $cached_value ) {
+				case 'up':
+					$this->tcp_responsive = 'true';
+					return true;
+				case 'down':
+					$this->tcp_responsive = 'false';
+					return false;
+			}
+		}
+	        $socket = @fsockopen($host, $port, $errno, $errstr, $float_timeout);
+	        if ( $socket === false ) {
+			if ( $use_apc )
+				apc_store($apc_key, 'down', $apc_ttl);
+			$this->tcp_responsive = "false [ > $float_timeout] ($errno) '$errstr'";
+	                return false;
+		}
+		fclose($socket);
+		if ( $use_apc )
+			apc_store($apc_key, 'up', $apc_ttl);
+		$this->tcp_responsive = 'true';
+	        return true;
+	}
 }
 
 if ( ! isset($wpdb) )

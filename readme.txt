@@ -2,9 +2,9 @@
 Contributors: matt, andy, ryan, mdawaffe
 Tags: mysql, scaling, performance, availibility
 Requires at least: 2.2
-Tested up to: 2.3-alpha
+Tested up to: 2.5
 
-HyperDB is an advanced database class that supports replication, failover, and federation.
+HyperDB is an advanced database class that supports partitioning, replication, failover, and federation.
 
 == Description ==
 
@@ -18,16 +18,13 @@ HyperDB is a very advanced database class that replaces WP's built-in DB functio
 * Failover for downed host
 * Advanced statistics for profiling
 
-It is based on the code currently used in production with 30+ DB servers on WordPress.com.
+It is based on the code currently used in production with dozens of DB servers on WordPress.com.
 
 == Installation ==
 
-This section describes how to install the plugin and get it working.
+Nothing goes in the plugins directory.
 
-e.g.
-
-1. Upload `plugin-name.php` to the `/wp-content/plugins/` directory
-1. Activate the plugin through the 'Plugins' menu in WordPress
-1. Place `<?php do_action('plugin_name_hook'); ?>` in your templates
-
-
+1. Upload `db.php` to the `/wp-content/` directory.
+1. Upload `db-settings.php` in the directory that holds `wp-config.php`
+1. Edit the db settings according to the directions in that file.
+1. Add this line to `wp-config.php` after ABSPATH is defined: {{{require('db-settings.php');}}}
