@@ -1,8 +1,5 @@
 <?php
 
-// This tells HyperDB to use the settings below instead of the definitions in wp-config.php.
-define( 'WP_USE_MULTIPLE_DB', true );
-
 // If you have multiple datacenters you can come up with your own datacenter
 // detection logic (php_uname?). This helps ensure the web servers try to
 // connect to the nearest database servers first, then distant ones.
