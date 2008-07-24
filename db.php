@@ -338,8 +338,8 @@ class db {
 				. '|CREATE(?:\s+\w+)?\s+INDEX.*\s+ON'
 				. '|DROP\s+INDEX.*\s+ON'
 				. '|LOAD\s+DATA.*INFILE.*INTO\s+TABLE'
-				. '|(?:GRANT|REVOKE).*ON\s+TABLE)'
-				. 'SHOW\s+(?:.*FROM|.*TABLE|'
+				. '|(?:GRANT|REVOKE).*ON\s+TABLE'
+				. '|SHOW\s+(?:.*FROM|.*TABLE)'
 				. ')\s+`?(\w+)`?/is', $q, $maybe) )
 			return $maybe[1];
 
