@@ -15,7 +15,7 @@ class db {
 	 * Should errors be shown in output?
 	 * @var bool
 	 */
-	var $show_errors = true;
+	var $show_errors = false;
 
 	/**
 	 * Should errors not be logged at all?
