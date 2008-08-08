@@ -716,7 +716,7 @@ class db {
 	}
 
 	/**
-	 * Update a row in the table with an array of data
+	 * Update rows in the table with an array of data
 	 * @param string $table WARNING: not sanitized!
 	 * @param array $data should not already be SQL-escaped
 	 * @param array $where a named array of WHERE column => value relationships.  Multiple member pairs will be joined with ANDs.  WARNING: the column names are not currently sanitized!
