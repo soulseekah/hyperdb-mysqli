@@ -253,8 +253,12 @@ class db {
 	 * @param string $str Error string
 	 */
 	function get_error( $str = '' ) {
-		if ( empty($str) )
-			$str = $this->last_error;
+		if ( empty($str) ) {
+			if ( $this->last_error )
+				$str = $this->last_error;
+			else
+				return false;
+		}
 
 		$error_str = "WordPress database error $str for query $this->last_query";
 
@@ -1012,7 +1016,7 @@ class db {
 		$caller = '';
 
 		foreach ( $bt as $trace ) {
-			if ( isset($trace['class']) && $trace['class'] == __CLASS__ )
+			if ( isset($trace['class']) && is_a( $this, $trace['class'] ) )
 				continue;
 			elseif ( !isset($trace['function']) )
 				continue;
@@ -1023,7 +1027,10 @@ class db {
 			elseif ( strtolower($trace['function']) == 'do_action' )
 				continue;
 
-			$caller = $trace['function'];
+			if ( isset($trace['class']) )
+				$caller = $trace['class'] . '::' . $trace['function'];
+			else
+				$caller = $trace['function'];
 			break;
 		}
 		return $caller;
