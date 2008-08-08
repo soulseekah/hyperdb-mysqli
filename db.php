@@ -42,6 +42,12 @@ class db {
 	var $last_query;
 
 	/**
+	 * The last table that was queried
+	 * @var string
+	 */
+	var $last_table;
+
+	/**
 	 * After any SQL_CALC_FOUND_ROWS query, the query "SELECT FOUND_ROWS()"
 	 * is sent and the mysql result resource stored here. The next query
 	 * for FOUND_ROWS() will retrieve this. We do this to prevent any
@@ -220,6 +226,14 @@ class db {
 	}
 
 	/**
+	 * Escapes array recursively for insertion into the database, for security
+	 * @param array $array
+	 */
+	function escape_deep( $array ) {
+		return is_array($array) ? array_map(array(&$this, 'escape_deep'), $array) : $this->escape( $array );
+	}
+
+	/**
 	 * Prepares a SQL query for safe use, using sprintf() syntax
 	 */
 	function prepare($args=NULL) {
@@ -235,31 +249,50 @@ class db {
 	}
 
 	/**
-	 * Print SQL/DB error
+	 * Get SQL/DB error
 	 * @param string $str Error string
 	 */
-	function print_error($str = '') {
+	function get_error( $str = '' ) {
 		if ( empty($str) )
 			$str = $this->last_error;
-
-		if ( $this->suppress_errors )
-			return false;
 
 		$error_str = "WordPress database error $str for query $this->last_query";
 
 		if ( $caller = $this->get_caller() )
 			$error_str .= " made by $caller";
 
+		if ( class_exists( 'WP_Error' ) )
+			return new WP_Error( 'db_query', $error_str, array( 'query' => $this->last_query, 'error' => $str, 'caller' => $caller ) );
+		else
+			return array( 'query' => $this->last_query, 'error' => $str, 'caller' => $caller, 'error_str' => $error_str );
+	}
+
+	/**
+	 * Print SQL/DB error
+	 * @param string $str Error string
+	 */
+	function print_error($str = '') {
+		if ( $this->suppress_errors )
+			return false;
+
+		$error = $this->get_error( $str );
+		if ( is_object( $error ) && is_a( $error, 'WP_Error' ) ) {
+			$err = $error->get_error_data();
+			$err['error_str'] = $error->get_error_messag();
+		} else {
+			$err =& $error;
+		}
+
 		$log_file = ini_get('error_log');
-		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) )
-			error_log($error_str, 0);
+		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) && function_exists( 'error_log' ) )
+			error_log($err['error_str'], 0);
 
 		// Is error output turned on or not
 		if ( !$this->show_errors )
 			return false;
 
-		$str = htmlspecialchars($str, ENT_QUOTES);
-		$query = htmlspecialchars($this->last_query, ENT_QUOTES);
+		$str = htmlspecialchars($err['str'], ENT_QUOTES);
+		$query = htmlspecialchars($err['query'], ENT_QUOTES);
 
 		// If there is an error then take note of it
 		print "<div id='error'>
@@ -618,6 +651,7 @@ class db {
 		$this->col_info = null;
 		$this->last_query = null;
 		$this->last_error = '';
+		$this->last_table = '';
 		$this->num_rows = 0;
 	}
 
@@ -710,7 +744,7 @@ class db {
 	 * @return mixed results of $this->query()
 	 */
 	function insert($table, $data) {
-		$data = add_magic_quotes($data);
+		$data = $this->escape_deep($data);
 		$fields = array_keys($data);
 		return $this->query("INSERT INTO $table (`" . implode('`,`',$fields) . "`) VALUES ('".implode("','",$data)."')");
 	}
@@ -723,7 +757,7 @@ class db {
 	 * @return mixed results of $this->query()
 	 */
 	function update($table, $data, $where){
-		$data = add_magic_quotes($data);
+		$data = $this->escape_deep($data);
 		$bits = $wheres = array();
 		foreach ( array_keys($data) as $k )
 			$bits[] = "`$k` = '$data[$k]'";
@@ -911,22 +945,58 @@ class db {
 	 * Checks wether of not the database version is high enough to support the features WordPress uses
 	 * @global $wp_version
 	 */
-	function check_database_version()
-	{
+	function check_database_version( $dbh_or_table = false ) {
 		global $wp_version;
 		// Make sure the server has MySQL 4.0
-		$mysql_version = preg_replace('|[^0-9\.]|', '', mysql_get_server_info($this->dbh));
+		$mysql_version = preg_replace( '|[^0-9\.]|', '', $this->db_version( $dbh_or_table ) );
 		if ( version_compare($mysql_version, '4.0.0', '<') )
-			return new WP_Error('database_version',sprintf(__('<strong>ERROR</strong>: WordPress %s requires MySQL 4.0.0 or higher'), $wp_version));
+			return new WP_Error( 'database_version', sprintf(__('<strong>ERROR</strong>: WordPress %s requires MySQL 4.0.0 or higher'), $wp_version) );
 	}
 
 	/**
 	 * This function is called when WordPress is generating the table schema to determine wether or not the current database
 	 * supports or needs the collation statements.
+	 * @return bool
 	 */
-	function supports_collation()
-	{
-		return ( version_compare(mysql_get_server_info($this->dbh), '4.1.0', '>=') );
+	function supports_collation() {
+		return $this->has_cap( 'collation' );
+	}
+
+	/**
+	 * Generic function to determine if a database supports a particular feature
+	 * @param string $db_cap the feature
+	 * @param false|string|resource $dbh_or_table the databaese (the current database, the database housing the specified table, or the database of the mysql resource)
+	 * @return bool
+	 */
+	function has_cap( $db_cap, $dbh_or_table = false ) {
+		$version = $this->db_version( $dbh_or_table );
+
+		switch ( strtolower( $db_cap ) ) :
+		case 'group_concat' :
+		case 'collation' :
+			return version_compare($version, '4.1', '>=');
+			break;
+		endswitch;
+
+		return false;
+	}
+
+	/**
+	 * The database version number
+	 * @param false|string|resource $dbh_or_table the databaese (the current database, the database housing the specified table, or the database of the mysql resource)
+	 * @return false|string false on failure, version number on success
+	 */
+	function db_version( $dbh_or_table = false ) {
+		if ( !$dbh_or_table )
+			$dbh =& $this->dbh;
+		elseif ( is_resource( $dbh_or_table ) )
+			$dbh =& $dbh_or_table;
+		else
+			$dbh = $this->db_connect( "DESCRIBE $dbh_or_table" );
+
+		if ( $dbh )
+			return mysql_get_server_info( $dbh );
+		return false;
 	}
 
 	/**
