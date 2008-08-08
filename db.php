@@ -278,7 +278,7 @@ class db {
 		$error = $this->get_error( $str );
 		if ( is_object( $error ) && is_a( $error, 'WP_Error' ) ) {
 			$err = $error->get_error_data();
-			$err['error_str'] = $error->get_error_messag();
+			$err['error_str'] = $error->get_error_message();
 		} else {
 			$err =& $error;
 		}
