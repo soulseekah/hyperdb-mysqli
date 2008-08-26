@@ -991,15 +991,15 @@ class db {
 	 * @return false|string false on failure, version number on success
 	 */
 	function db_version( $dbh_or_table = false ) {
-		if ( !$dbh_or_table )
+		if ( !$dbh_or_table && $this->dbh )
 			$dbh =& $this->dbh;
 		elseif ( is_resource( $dbh_or_table ) )
 			$dbh =& $dbh_or_table;
 		else
-			$dbh = $this->db_connect( "DESCRIBE $dbh_or_table" );
+			$dbh = $this->db_connect( "SELECT FROM $dbh_or_table $this->users" );
 
 		if ( $dbh )
-			return mysql_get_server_info( $dbh );
+			return preg_replace('/[^0-9.].*/', '', mysql_get_server_info( $dbh ));
 		return false;
 	}
 
