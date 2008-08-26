@@ -1075,6 +1075,201 @@ class db {
 } // class db
 endif;
 
+if ( defined( 'BACKPRESS_PATH' ) ) :
+class BPDB_Hyper extends db {
+	function BPDB_Hyper() {
+		$args = func_get_args();
+		return call_user_func_array( array(&$this, '__construct'), $args );
+	}
+
+	function __construct( $args ) { // no private _init method
+		if ( 4 == func_num_args() )
+			$args = array( 'user' => $args, 'password' => func_get_arg(1), 'name' => func_get_arg(2), 'host' => func_get_arg(3) );
+
+		$defaults = array(
+			'user' => false,
+			'password' => false,
+			'name' => false,
+			'host' => 'localhost',
+			'charset' => false,
+			'collate' => false,
+			'errors' => false
+		);
+
+		$args = wp_parse_args( $args, $defaults );
+
+		$hyper = array();
+
+		switch ( $args['errors'] ) :
+		case 'show' :
+			$hyper['show_errors'] = true;
+			break;
+		case 'suppress' :
+			$hyper['suppress_errors'] = true;
+			break;
+		endswitch;
+
+		if ( $args['name'] ) {
+			$hyper['db_server'] = array(
+				'user' => $args['user'],
+				'password' => $args['password'],
+				'name' => $args['name'],
+				'host' => $args['host']
+			);
+		}
+
+		$hyper['save_queries'] = (bool) @constant('SAVEQUERIES');
+
+		// HyperDB does not support per-table charsets, collations
+		foreach ( array( 'charset', 'collate' ) as $arg )
+			if ( isset($args[$arg]) )
+				$hyper[$arg] = $args[$arg];
+
+		return parent::__construct($hyper);
+	}
+
+	/**
+	 * Sets the prefix of the database tables
+	 * @param string prefix
+	 * @param false|array tables (optional: false)
+	 *	table identifiers are array keys
+	 *	array values
+	 *		empty: set prefix: array( 'posts' => false, 'users' => false, ... )
+	 *		string: set to that array value: array( 'posts' => 'my_posts', 'users' => 'my_users' )
+	 *		array: array[0] is DB identifier, array[1] is table name: array( 'posts' => array( 'global', 'my_posts' ), 'users' => array( 'users', 'my_users' ) )
+	 *	OR array values (with numeric keys): array( 'posts', 'users', ... )
+	 *
+	 * @return string the previous prefix (mostly only meaningful if all $table parameter was false)
+	 */
+	// Combines BPDB::set_prefix and BPDB_Multi::set_prefix
+	function set_prefix( $prefix, $tables = false ) {
+		if ( !$prefix )
+			return false;
+		if ( preg_match('|[^a-z0-9_]|i', $prefix) )
+			return new WP_Error('invalid_db_prefix', 'Invalid database prefix'); // No gettext here
+
+		$old_prefix = $this->prefix;
+
+		if ( $tables && is_array($tables) ) {
+			$_tables =& $tables;
+		} else {
+			$_tables =& $this->tables;
+			$this->prefix = $prefix;
+		}
+
+		foreach ( $_tables as $key => $value ) {
+			if ( is_numeric( $key ) ) { // array( 'posts', 'users', ... )
+				$this->$value = $prefix . $value;
+			} elseif ( !$value ) { // array( 'posts' => false, 'users' => false, ... )
+				$this->$key = $prefix . $key;
+			} elseif ( is_string($value) ) { // array( 'posts' => 'my_posts', 'users' => 'my_users' )
+				$this->$key = $value;
+			} elseif ( is_array($value) ) { // array( 'posts' => array( 'global', 'my_posts' ), 'users' => array( 'users', 'my_users' ) )
+				$this->add_db_table( $value[0], $value[1] );
+				$this->$key = $value[1];
+			}
+		}
+
+		return $old_prefix;
+	}
+
+	/**
+	 * Print SQL/DB error
+	 * @param string $str Error string
+	 */
+	function print_error($str = '') {
+		if ( $this->suppress_errors )
+			return false;
+
+		$error = $this->get_error( $str );
+		if ( is_object( $error ) && is_a( $error, 'WP_Error' ) ) {
+			$err = $error->get_error_data();
+			$err['error_str'] = sprintf( BPDB__ERROR_STRING, $err['str'], $err['query'], $err['caller'] );
+		} else {
+			$err =& $error;
+		}
+
+		$log_file = ini_get('error_log');
+		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) && function_exists( 'error_log' ) )
+			error_log($err['error_str'], 0);
+
+		// Is error output turned on or not
+		if ( !$this->show_errors )
+			return false;
+
+		$str = htmlspecialchars($err['str'], ENT_QUOTES);
+		$query = htmlspecialchars($err['query'], ENT_QUOTES);
+		$caller = htmlspecialchars($err['caller'], ENT_QUOTES);
+
+		// If there is an error then take note of it
+		printf( BPDB__ERROR_HTML, $str, $query, $caller );
+	}
+
+	/**
+	 * Add a database server's information.  Does not automatically connect.
+	 * @param string $ds Dataset: the name of the dataset.
+	 * @param array $args
+	 *	ds  => string Dataset: the name of the dataset. Just use "global" if you don't need horizontal partitioning.
+	 *	part => string Partition: the vertical partition number (1, 2, 3, etc.). Use "0" if you don't need vertical partitioning.
+	 *	dc => string Datacenter: where the database server is located. Airport codes are convenient. Use whatever.
+	 *	read => int Read order: lower number means use this for more reads. Zero means no reads (e.g. for masters).
+	 *	write => int Write flag: is this server writable?
+	 *	host => string Internet address: host:port of server on internet. 
+	 *	lhost => string Local address: host:port of server for use when in same datacenter. Leave empty if no local address exists.
+	 *	name => string Database name.
+	 *	user => string Database user.
+	 *	password => string Database password.
+	 *	charset => string Database default charset.  Used in a SET NAMES query. (optional) (ignored)
+	 *	collate => string Database default collation.  If charset supplied, optionally added to the SET NAMES query (optional) (ignored)
+	 */
+	function add_db_server( $ds, $args = null ) {
+		$defaults = array(
+			'part' => 0,
+			'dc' => '',
+			'read' => 1,
+			'write' => 1,
+			'host' => 'localhost',
+			'lhost' => '',
+			'name' => false,
+			'user' => false,
+			'password' => false,
+			'charset' => false,
+			'collate' => false
+		);
+
+		// We're adding another DB so we're no longer single_db.  Put single_db data into db_servers
+		// during the load procedure, bbPress starts out single but may end up multi
+		// (at the moment, bbPress stores the multi info in the global "single" DB)
+		if ( $this->single_db ) {
+			$this->single_db = false;
+			$this->add_db_server( 'global', $this->db_server );
+			$this->db_server = array();
+			$this->dbhs['global'] =& $this->dbh;
+			$this->db_servers =& $GLOBALS['db_servers'];
+		}
+
+		extract( wp_parse_args( $args, $defaults ), EXTR_SKIP );
+
+		add_db_server( $ds, $part, $dc, $read, $write, $host, $lhost, $name, $user, $password );
+	}
+
+	/**
+	 * Maps a table to a dataset.
+	 * @param string $ds Dataset: the name of the dataset.
+	 * @param string $table
+	 */
+	function add_db_table( $ds, $table ) {
+		add_db_table( $ds, $table );
+		if ( empty( $this->db_tables ) )
+			$this->db_tables =& $GLOBALS['db_tables'];
+	}
+}
+
+// BackPress creates the DB object on its own.  Do not create one here
+
+else : // BackPress
+
+
 if ( !class_exists( 'wpdb' ) ) :
 if ( defined('WPMU') ) :
 class wpdb extends db {
@@ -1296,7 +1491,10 @@ class wpdb extends db {
 endif;
 endif;
 
+// WordPress and WordPress MU do not create their own DB object.  Create one here.
 if ( ! isset($wpdb) )
 	$wpdb = new wpdb(DB_USER, DB_PASSWORD, DB_NAME, DB_HOST);
+
+endif; // BackPress
 
 ?>
