@@ -29,13 +29,13 @@ Nothing goes in the plugins directory.
 
 `define('WPMU', true);`
 
-1. Upload `db.php` to the `/wp-content/` directory. At this point, HyperDB is active. It will use the database connection constants until you complete the final steps.
+2. Upload `db.php` to the `/wp-content/` directory. At this point, HyperDB is active. It will use the database connection constants until you complete the final steps.
 
-1. Upload `db-settings.php` in the directory that holds `wp-config.php`
+3. Upload `db-settings.php` in the directory that holds `wp-config.php`
 
-1. Edit the db settings according to the directions in that file.
+4. Edit the db settings according to the directions in that file.
 
-1. Add this line near the top of `wp-config.php`:
+5. Add this line near the top of `wp-config.php`:
 
 `require('db-settings.php');`
 
