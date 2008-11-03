@@ -370,7 +370,7 @@ class db {
 				. '|(?:RENAME|OPTIMIZE|BACKUP|RESTORE|CHECK|CHECKSUM|ANALYZE|OPTIMIZE|REPAIR).*\s+TABLE'
 				. '|TRUNCATE(?:\s+TABLE)?'
 				. '|CREATE(?:\s+TEMPORARY)?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?'
-				. '|ALTER(?:\s+IGNORE)?'
+				. '|ALTER(?:\s+IGNORE)?\s+TABLE'
 				. '|DROP\s+TABLE(?:\s+IF\s+EXISTS)?'
 				. '|CREATE(?:\s+\w+)?\s+INDEX.*\s+ON'
 				. '|DROP\s+INDEX.*\s+ON'
