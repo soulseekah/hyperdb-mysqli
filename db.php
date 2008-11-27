@@ -709,33 +709,36 @@ class db {
 			return false;
 		}
 
-		if ( is_resource($this->result) ) {
-			$i = 0;
-			while ($i < mysql_num_fields($this->result)) {
-				$this->col_info[$i] = mysql_fetch_field($this->result);
-				$i++;
-			}
-			$num_rows = 0;
-			while ( $row = mysql_fetch_object($this->result) ) {
-				$this->last_result[$num_rows] = $row;
-				$num_rows++;
-			}
-
-			mysql_free_result($this->result);
-
-			// Log number of rows the query returned
-			$this->num_rows = $num_rows;
-
-			// Return number of rows selected
-			$return_val = $this->num_rows;
-		} else {
+		if ( preg_match("/^\\s*(insert|delete|update|replace|alter) /i",$query) ) {
 			$this->rows_affected = mysql_affected_rows($this->dbh);
+
 			// Take note of the insert_id
 			if ( preg_match("/^\\s*(insert|replace) /i",$query) ) {
 				$this->insert_id = mysql_insert_id($this->dbh);
 			}
 			// Return number of rows affected
 			$return_val = $this->rows_affected;
+		} else {
+			$i = 0;
+			$this->col_info = array();
+			while ($i < @mysql_num_fields($this->result)) {
+				$this->col_info[$i] = @mysql_fetch_field($this->result);
+				$i++;
+			}
+			$num_rows = 0;
+			$this->last_result = array();
+			while ( $row = @mysql_fetch_object($this->result) ) {
+				$this->last_result[$num_rows] = $row;
+				$num_rows++;
+			}
+
+			@mysql_free_result($this->result);
+
+			// Log number of rows the query returned
+			$this->num_rows = $num_rows;
+
+			// Return number of rows selected
+			$return_val = $this->num_rows;
 		}
 
 		return $return_val;
@@ -763,7 +766,7 @@ class db {
 	function update($table, $data, $where){
 		$data = $this->escape_deep($data);
 		$bits = $wheres = array();
-		foreach ( array_keys($data) as $k )
+		foreach ( (array) array_keys($data) as $k )
 			$bits[] = "`$k` = '$data[$k]'";
 
 		if ( is_array( $where ) )
@@ -862,7 +865,7 @@ class db {
 			// Return an array of row objects with keys from column 1
 			// (Duplicates are discarded)
 			$key = $this->col_info[0]->name;
-			foreach ( $this->last_result as $row )
+			foreach ( (array) $this->last_result as $row )
 				if ( !isset( $new_array[ $row->$key ] ) )
 					$new_array[ $row->$key ] = $row;
 			if ( $output == ARRAY_K )
@@ -897,7 +900,7 @@ class db {
 		if ( $this->col_info ) {
 			if ( $col_offset == -1 ) {
 				$i = 0;
-				foreach($this->col_info as $col ) {
+				foreach( (array) $this->col_info as $col ) {
 					$new_array[$i] = $col->{$info_type};
 					$i++;
 				}
@@ -1016,7 +1019,7 @@ class db {
 		$bt = debug_backtrace();
 		$caller = '';
 
-		foreach ( $bt as $trace ) {
+		foreach ( (array) $bt as $trace ) {
 			if ( isset($trace['class']) && is_a( $this, $trace['class'] ) )
 				continue;
 			elseif ( !isset($trace['function']) )
