@@ -342,7 +342,7 @@ class db {
 	 */
 	function get_table_from_query ( $q ) {
 		// Remove characters that can legally trail the table name
-		rtrim($q, ';/-#');
+		$q = rtrim($q, ';/-#');
 		// allow (select...) union [...] style queries. Use the first queries table name.
 		$q = ltrim($q, "\t ("); 
 
