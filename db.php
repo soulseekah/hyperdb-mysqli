@@ -430,6 +430,16 @@ class db {
 		return compact('dataset', 'hash', 'partition');
 	}
 
+	function get_dataset_from_table($table) {
+		if ( isset($this->db_tables[$table]) )
+			return $this->db_tables[$table];
+		foreach ( $this->db_tables as $pattern => $dataset ) {
+			if ( '/' == substr( $pattern, 0, 1 ) && preg_match( $pattern, $table ) ) 
+				return $dataset;
+		}
+		return false;
+	}
+
 	/**
 	 * Figure out which database server should handle the query, and connect to it.
 	 * @param string query
@@ -461,8 +471,7 @@ class db {
 			$this->last_table = $table;
 			$partition = 0;
 
-			if ( is_array($this->db_tables) && array_key_exists($table, $this->db_tables) ) {
-				$dataset = $this->db_tables[$table];
+			if ( is_array($this->db_tables) && $dataset = $this->get_dataset_from_table( $table ) ) {
 				$dbhname = $dataset;
 			} else if ( $ds_part = $this->get_ds_part_from_table($table) ) {
 				extract( $ds_part, EXTR_OVERWRITE );
