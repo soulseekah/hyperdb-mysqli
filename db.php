@@ -12,33 +12,47 @@ if (!defined('SAVEQUERIES'))
 if ( !class_exists('db') ) :
 class db {
 	/**
-	 * Should errors be shown in output?
-	 * @var bool
-	 */
+ 	 * Whether to show SQL/DB errors
+ 	 *
+ 	 * @since 0.71
+ 	 * @access private
+ 	 * @var bool
+ 	 */
 	var $show_errors = false;
 
 	/**
-	 * Should errors not be logged at all?
-	 * @var bool
-	 */
+ 	 * Whether to suppress errors during the DB bootstrapping.
+ 	 *
+ 	 * @access private
+ 	 * @since {@internal Version Unknown}}
+ 	 * @var bool
+ 	 */
 	var $suppress_errors = false;
 
 	/**
-	 * The most recent error caused by a query
-	 * @var string
-	 */
+ 	 * The last error during query.
+ 	 *
+ 	 * @since {@internal Version Unknown}}
+ 	 * @var string
+ 	 */
 	var $last_error;
 
 	/**
-	 * The number of queries made
+	 * Amount of queries made
+	 *
+	 * @since 1.2.0
+	 * @access private
 	 * @var int
 	 */
 	var $num_queries = 0;
 
 	/**
-	 * The last query that was made
-	 * @var string
-	 */
+ 	 * Saved result of the last query made
+ 	 *
+ 	 * @since 1.2.0
+ 	 * @access private
+ 	 * @var array
+ 	 */
 	var $last_query;
 
 	/**
@@ -57,16 +71,38 @@ class db {
 	var $last_found_rows_result;
 
 	/**
+ 	 * Saved info on the table column
+ 	 *
 	 * The results of mysql_fetch_field() on the last query result
-	 * @var array
-	 */
+ 	 *
+ 	 * @since 1.2.0
+ 	 * @access private
+ 	 * @var array
+ 	 */
 	var $col_info;
 	
 	/**
-	 * The query log
-	 * @var array
-	 */
+ 	 * Saved queries that were executed
+ 	 *
+ 	 * @since 1.5.0
+ 	 * @access private
+ 	 * @var array
+ 	 */
 	var $queries = array();
+
+	/**
+	 * Format specifiers for DB columns. Columns not listed here default to %s.  Initialized in wp-settings.php.
+	 *
+	 * Keys are colmn names, values are format types: 'ID' => '%d'
+	 *
+	 * @since 2.8.0
+	 * @see wpdb:prepare()
+	 * @see wpdb:insert()
+	 * @see wpdb:update()
+	 * @access public
+	 * @war array
+	 */
+	var $field_types = array();
 
 	/**
 	 * Whether to use the query log
@@ -75,15 +111,31 @@ class db {
 	var $save_queries = false;
 
 	/**
-	 * The character set applied by a "SET NAMES" query after connecting
+	 * Database table columns charset
+	 *
+	 * @since 2.2.0
+	 * @access public
 	 * @var string
 	 */
 	var $charset;
 
 	/**
-	 * The collation to go with the character set
+	 * Database table columns collate
+	 *
+	 * @since 2.2.0
+	 * @access public
+	 * @var string
 	 */
 	var $collate;
+
+	/**
+	 * Whether to use mysql_real_escape_string
+	 *  
+	 * @since 2.8.0
+	 * @access public
+	 * @var bool
+	 */
+	var $real_escape = false;
 
 	/**
 	 * The current mysql link resource
@@ -208,21 +260,64 @@ class db {
 		}
 	}
 
+	function _weak_escape($string) {
+		return addslashes($string);
+	}
+
+	function _real_escape($string) {
+		if ( $this->dbh && $this->real_escape )
+			return mysql_real_escape_string( $string, $this->dbh );
+		else
+			return addslashes( $string );
+	}
+
+	function _escape($data) {
+		if ( is_array($data) ) {
+			foreach ( (array) $data as $k => $v ) {
+				if ( is_array($v) )
+					$data[$k] = $this->_escape( $v );
+				else
+					$data[$k] = $this->_real_escape( $v );
+			}
+		} else {
+			$data = $this->_real_escape( $data );
+		}
+
+		return $data;
+	}
+
 	/**
-	 * Escapes content for insertion into the database, for security
-	 * @param string $string
+	 * Escapes content for insertion into the database using addslashes(), for security
+	 *
+	 * @since 0.71
+	 *
+	 * @param string|array $data
 	 * @return string query safe string
 	 */
-	function escape($string) {
-		return addslashes( $string );
+	function escape($data) {
+		if ( is_array($data) ) {
+			foreach ( (array) $data as $k => $v ) {
+				if ( is_array($v) )
+					$data[$k] = $this->escape( $v );
+				else
+					$data[$k] = $this->_weak_escape( $v );
+			}
+		} else {
+			$data = $this->_weak_escape( $data );
+		}
+
+		return $data;
 	}
 
 	/**
 	 * Escapes content by reference for insertion into the database, for security
+	 *
+	 * @since 2.3.0
+	 *
 	 * @param string $s
 	 */
-	function escape_by_ref(&$s) {
-		$s = $this->escape($s);
+	function escape_by_ref(&$string) {
+		$string = $this->_real_escape( $string );
 	}
 
 	/**
@@ -234,18 +329,41 @@ class db {
 	}
 
 	/**
-	 * Prepares a SQL query for safe use, using sprintf() syntax
+	 * Prepares a SQL query for safe execution.  Uses sprintf()-like syntax.
+	 *
+	 * This function only supports a small subset of the sprintf syntax; it only supports %d (decimal number), %s (string).
+	 * Does not support sign, padding, alignment, width or precision specifiers.
+	 * Does not support argument numbering/swapping.
+	 *
+	 * May be called like {@link http://php.net/sprintf sprintf()} or like {@link http://php.net/vsprintf vsprintf()}.
+	 *
+	 * Both %d and %s should be left unquoted in the query string.
+	 *
+	 * <code>
+	 * wpdb::prepare( "SELECT * FROM `table` WHERE `column` = %s AND `field` = %d", "foo", 1337 )
+	 * </code>
+	 *
+	 * @link http://php.net/sprintf Description of syntax.
+	 * @since 2.3.0
+	 *
+	 * @param string $query Query statement with sprintf()-like placeholders
+	 * @param array|mixed $args The array of variables to substitute into the query's placeholders if being called like {@link http://php.net/vsprintf vsprintf()}, or the first variable to substitute into the query's placeholders if being called like {@link http://php.net/sprintf sprintf()}.
+	 * @param mixed $args,... further variables to substitute into the query's placeholders if being called like {@link http://php.net/sprintf sprintf()}.
+	 * @return null|string Sanitized query string
 	 */
-	function prepare($args=NULL) {
-		if ( NULL === $args )
+	function prepare($query = null) { // ( $query, *$args )
+		if ( is_null( $query ) )
 			return;
 		$args = func_get_args();
-		$query = array_shift($args);
+		array_shift($args);
+		// If args were passed as an array (as in vsprintf), move them up
+		if ( isset($args[0]) && is_array($args[0]) )
+			$args = $args[0];
 		$query = str_replace("'%s'", '%s', $query); // in case someone mistakenly already singlequoted it
 		$query = str_replace('"%s"', '%s', $query); // doublequote unquoting
 		$query = str_replace('%s', "'%s'", $query); // quote the strings
 		array_walk($args, array(&$this, 'escape_by_ref'));
-		return vsprintf($query, $args);
+		return @vsprintf($query, $args);
 	}
 
 	/**
@@ -756,44 +874,99 @@ class db {
 	}
 
 	/**
-	 * Insert an array of data into a table
-	 * @param string $table WARNING: not sanitized!
-	 * @param array $data should not already be SQL-escaped
-	 * @return mixed results of $this->query()
+	 * Insert a row into a table.
+	 *
+	 * <code>
+	 * wpdb::insert( 'table', array( 'column' => 'foo', 'field' => 1337 ), array( '%s', '%d' ) )
+	 * </code>
+	 *
+	 * @since 2.5.0
+	 * @see wpdb::prepare()
+	 *
+	 * @param string $table table name
+	 * @param array $data Data to insert (in column => value pairs).  Both $data columns and $data values should be "raw" (neither should be SQL escaped).
+	 * @param array|string $format (optional) An array of formats to be mapped to each of the value in $data.  If string, that format will be used for all of the values in $data.  A format is one of '%d', '%s' (decimal number, string).  If omitted, all values in $data will be treated as strings.
+	 * @return int|false The number of rows inserted, or false on error.
 	 */
-	function insert($table, $data) {
-		$data = $this->escape_deep($data);
+	function insert($table, $data, $format = null) {
+		$formats = $format = (array) $format;
 		$fields = array_keys($data);
-		return $this->query("INSERT INTO $table (`" . implode('`,`',$fields) . "`) VALUES ('".implode("','",$data)."')");
+		$formatted_fields = array();
+		foreach ( $fields as $field ) {
+			if ( !empty($format) )
+				$form = ( $form = array_shift($formats) ) ? $form : $format[0];
+			elseif ( isset($this->field_types[$field]) )
+				$form = $this->field_types[$field];
+			else
+				$form = '%s';
+			$formatted_fields[] = $form;
+		}
+		$sql = "INSERT INTO `$table` (`" . implode( '`,`', $fields ) . "`) VALUES ('" . implode( "','", $formatted_fields ) . "')";
+		return $this->query( $this->prepare( $sql, $data) );
 	}
 
+
 	/**
-	 * Update rows in the table with an array of data
-	 * @param string $table WARNING: not sanitized!
-	 * @param array $data should not already be SQL-escaped
-	 * @param array $where a named array of WHERE column => value relationships.  Multiple member pairs will be joined with ANDs.  WARNING: the column names are not currently sanitized!
-	 * @return mixed results of $this->query()
+	 * Update a row in the table
+	 *
+	 * <code>
+	 * wpdb::update( 'table', array( 'column' => 'foo', 'field' => 1337 ), array( 'ID' => 1 ), array( '%s', '%d' ), array( '%d' ) )
+	 * </code>
+	 *
+	 * @since 2.5.0
+	 * @see wpdb::prepare()
+	 *
+	 * @param string $table table name
+	 * @param array $data Data to update (in column => value pairs).  Both $data columns and $data values should be "raw" (neither should be SQL escaped).
+	 * @param array $where A named array of WHERE clauses (in column => value pairs).  Multiple clauses will be joined with ANDs.  Both $where columns and $where values should be "raw".
+	 * @param array|string $format (optional) An array of formats to be mapped to each of the values in $data.  If string, that format will be used for all of the values in $data.  A format is one of '%d', '%s' (decimal number, string).  If omitted, all values in $data will be treated as strings.
+	 * @param array|string $format_where (optional) An array of formats to be mapped to each of the values in $where.  If string, that format will be used for all of  the items in $where.  A format is one of '%d', '%s' (decimal number, string).  If omitted, all values in $where will be treated as strings.
+	 * @return int|false The number of rows updated, or false on error.
 	 */
-	function update($table, $data, $where){
-		$data = $this->escape_deep($data);
-		$bits = $wheres = array();
-		foreach ( (array) array_keys($data) as $k )
-			$bits[] = "`$k` = '$data[$k]'";
-
-		if ( is_array( $where ) )
-			foreach ( $where as $c => $v )
-				$wheres[] = "$c = '" . $this->escape( $v ) . "'";
-		else
+	function update($table, $data, $where, $format = null, $where_format = null) {
+		if ( !is_array( $where ) )
 			return false;
-		return $this->query( "UPDATE $table SET " . implode( ', ', $bits ) . ' WHERE ' . implode( ' AND ', $wheres ) );
+
+		$formats = $format = (array) $format;
+		$bits = $wheres = array();
+		foreach ( (array) array_keys($data) as $field ) {
+			if ( !empty($format) )
+				$form = ( $form = array_shift($formats) ) ? $form : $format[0];
+			elseif ( isset($this->field_types[$field]) )
+				$form = $this->field_types[$field];
+			else
+				$form = '%s';
+			$bits[] = "`$field` = {$form}";
+		}
+
+		$where_formats = $where_format = (array) $where_format;
+		foreach ( (array) array_keys($where) as $field ) {
+			if ( !empty($where_format) )
+				$form = ( $form = array_shift($where_formats) ) ? $form : $where_format[0];
+			elseif ( isset($this->field_types[$field]) )
+				$form = $this->field_types[$field];
+			else
+				$form = '%s';
+			$wheres[] = "`$field` = {$form}";
+		}
+
+		$sql = "UPDATE `$table` SET " . implode( ', ', $bits ) . ' WHERE ' . implode( ' AND ', $wheres );
+		return $this->query( $this->prepare( $sql, array_merge(array_values($data), array_values($where))) );
 	}
 
 	/**
-	 * Get one variable from the database
-	 * @param string $query (can be null as well, for caching, see codex)
-	 * @param int $x = 0 row num to return
-	 * @param int $y = 0 col num to return
-	 * @return mixed results
+	 * Retrieve one variable from the database.
+	 *
+	 * Executes a SQL query and returns the value from the SQL result.
+	 * If the SQL result contains more than one column and/or more than one row, this function returns the value in the column and row specified.
+	 * If $query is null, this function returns the value in the specified column and row from the previous SQL result.
+	 *
+	 * @since 0.71
+	 *
+	 * @param string|null $query SQL query.  If null, use the result from the previous query.
+	 * @param int $x (optional) Column of value to return.  Indexed from 0.
+	 * @param int $y (optional) Row of value to return.  Indexed from 0.
+	 * @return string Database query result
 	 */
 	function get_var($query=null, $x = 0, $y = 0) {
 		$this->func_call = "\$db->get_var(\"$query\",$x,$y)";
@@ -810,11 +983,16 @@ class db {
 	}
 
 	/**
-	 * Get one row from the database
-	 * @param string $query
-	 * @param string $output ARRAY_A | ARRAY_N | OBJECT
-	 * @param int $y row num to return
-	 * @return mixed results
+	 * Retrieve one row from the database.
+	 *
+	 * Executes a SQL query and returns the row from the SQL result.
+	 *
+	 * @since 0.71
+	 *
+	 * @param string|null $query SQL query.
+	 * @param string $output (optional) one of ARRAY_A | ARRAY_N | OBJECT constants.  Return an associative array (column => value, ...), a numerically indexed array (0 => value, ...) or an object ( ->column = value ), respectively.
+	 * @param int $y (optional) Row to return.  Indexed from 0.
+	 * @return mixed Database query result in format specifed by $output
 	 */
 	function get_row($query = null, $output = OBJECT, $y = 0) {
 		$this->func_call = "\$db->get_row(\"$query\",$output,$y)";
@@ -833,15 +1011,22 @@ class db {
 		} elseif ( $output == ARRAY_N ) {
 			return $this->last_result[$y] ? array_values(get_object_vars($this->last_result[$y])) : null;
 		} else {
-			$this->print_error(" \$db->get_row(string query, output type, int offset) -- Output type must be one of: OBJECT, ARRAY_A, ARRAY_N");
+			$this->print_error(/*WP_I18N_DB_GETROW_ERROR*/" \$db->get_row(string query, output type, int offset) -- Output type must be one of: OBJECT, ARRAY_A, ARRAY_N"/*/WP_I18N_DB_GETROW_ERROR*/);
 		}
 	}
 
 	/**
-	 * Gets one column from the database
-	 * @param string $query (can be null as well, for caching, see codex)
-	 * @param int $x col num to return
-	 * @return array results
+	 * Retrieve one column from the database.
+	 *
+	 * Executes a SQL query and returns the column from the SQL result.
+	 * If the SQL result contains more than one column, this function returns the column specified.
+	 * If $query is null, this function returns the specified column from the previous SQL result.
+	 *
+	 * @since 0.71
+	 *
+	 * @param string|null $query SQL query.  If null, use the result from the previous query.
+	 * @param int $x Column to return.  Indexed from 0.
+	 * @return array Database query result.  Array indexed from 0 by SQL result row number.
 	 */
 	function get_col($query = null , $x = 0) {
 		if ( $query )
@@ -856,10 +1041,15 @@ class db {
 	}
 
 	/**
-	 * Return an entire result set from the database
-	 * @param string $query (can also be null to pull from the cache)
-	 * @param string $output ARRAY_A | ARRAY_N | OBJECT_K | OBJECT
-	 * @return mixed results
+	 * Retrieve an entire SQL result set from the database (i.e., many rows)
+	 *
+	 * Executes a SQL query and returns the entire SQL result.
+	 *
+	 * @since 0.71
+	 *
+	 * @param string $query SQL query.
+	 * @param string $output (optional) ane of ARRAY_A | ARRAY_N | ARRAY_K | OBJECT | OBJECT_K constants.  With one of the first three, return an array of rows indexed from 0 by SQL result row number.  Each row is an associative array (column => value, ...), a numerically indexed array (0 => value, ...), or an object. ( ->column = value ), respectively.  With OBJECT_K, return an associative array of row objects keyed by the value of each row's first column's value.  Duplicate keys are discarded.
+	 * @return mixed Database query results
 	 */
 	function get_results($query = null, $output = OBJECT) {
 		$this->func_call = "\$db->get_results(\"$query\", $output)";
@@ -886,7 +1076,7 @@ class db {
 			// Return an integer-keyed array of...
 			if ( $this->last_result ) {
 				$i = 0;
-				foreach( $this->last_result as $row ) {
+				foreach( (array) $this->last_result as $row ) {
 					if ( $output == ARRAY_N ) {
 						// ...integer-keyed row arrays
 						$new_array[$i] = array_values( get_object_vars( $row ) );
@@ -902,10 +1092,13 @@ class db {
 	}
 
 	/**
-	 * Grabs column metadata from the last query
+	 * Retrieve column metadata from the last query.
+	 *
+	 * @since 0.71
+	 *
 	 * @param string $info_type one of name, table, def, max_length, not_null, primary_key, multiple_key, unique_key, numeric, blob, type, unsigned, zerofill
 	 * @param int $col_offset 0: col name. 1: which table the col's in. 2: col's max length. 3: if the col is numeric. 4: col's type
-	 * @return mixed results
+	 * @return mixed Column Results
 	 */
 	function get_col_info($info_type = 'name', $col_offset = -1) {
 		if ( $this->col_info ) {
@@ -923,7 +1116,11 @@ class db {
 	}
 
 	/**
-	 * Starts the timer, for debugging purposes
+	 * Starts the timer, for debugging purposes.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return true
 	 */
 	function timer_start() {
 		$mtime = microtime();
@@ -933,8 +1130,11 @@ class db {
 	}
 
 	/**
-	 * Stops the debugging timer
-	 * @return int total time spent on the query, in milliseconds
+	 * Stops the debugging timer.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return int Total time spent on the query, in milliseconds
 	 */
 	function timer_stop() {
 		$mtime = microtime();
@@ -945,10 +1145,16 @@ class db {
 	}
 
 	/**
-	 * Wraps fatal errors in a nice header and footer and dies.
+	 * Wraps errors in a nice header and footer and dies.
+	 *
+	 * Will not die if wpdb::$show_errors is true
+	 *
+	 * @since 1.5.0
+	 *
 	 * @param string $message
+	 * @return false|void
 	 */
-	function bail($message) { // Just wraps errors in a nice header and footer
+	function bail($message) {
 		if ( !$this->show_errors ) {
 			if ( class_exists('WP_Error') )
 				$this->error = new WP_Error('500', $message);
