@@ -511,6 +511,7 @@ class db {
 	 */
 	function is_write_query( $q ) {
 		// Quick and dirty: only send SELECT statements to slaves
+		$q = ltrim($q, "\t (");
 		$word = strtoupper( substr( trim( $q ), 0, 6 ) );
 		return 'SELECT' != $word;
 	}
