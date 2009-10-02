@@ -478,6 +478,12 @@ class db {
 		if ( preg_match('/^\s*SELECT.*?\s+FOUND_ROWS\(\)/is', $q) )
 			return $this->last_table;
 
+		// SHOW TABLE STATUS LIKE and SHOW TABLE STATUS WHERE Name = 
+		if ( preg_match('/^\s*'
+				. 'SHOW\s+TABLE\s+STATUS.+(?:LIKE\s+|WHERE\s+Name\s*=\s*)'
+				. '\W(\w+)\W/is', $q, $maybe) )
+			return $maybe[1];
+
 		// Big pattern for the rest of the table-related queries in MySQL 5.0
 		if ( preg_match('/^\s*(?:'
 				. '(?:EXPLAIN\s+(?:EXTENDED\s+)?)?SELECT.*?\s+FROM'
