@@ -1,5 +1,5 @@
 === HyperDB ===
-Contributors: matt, andy, ryan, mdawaffe
+Contributors: matt, andy, ryan, mdawaffe, automattic
 Tags: mysql, scaling, performance, availability
 Requires at least: 2.3
 Tested up to: 2.8
