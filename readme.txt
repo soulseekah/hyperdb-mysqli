@@ -2,7 +2,7 @@
 Contributors: matt, andy, ryan, mdawaffe, automattic
 Tags: mysql, scaling, performance, availability
 Requires at least: 2.3
-Tested up to: 2.8
+Tested up to: 2.8.5
 Stable tag: trunk
 
 HyperDB is an advanced database class that supports partitioning, replication, failover, and federation.
