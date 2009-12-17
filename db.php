@@ -138,6 +138,15 @@ class db {
 	var $real_escape = false;
 
 	/**
+	 * Database Username
+	 *
+	 * @since 2.9.0
+	 * @access private
+	 * @var string
+	 */
+	var $dbuser;
+
+	/**
 	 * The current mysql link resource
 	 * @var resource
 	 */
@@ -1161,10 +1170,10 @@ class db {
 	 * @param string $message
 	 * @return false|void
 	 */
-	function bail($message) {
+	function bail($message, $error_code = '500') {
 		if ( !$this->show_errors ) {
 			if ( class_exists('WP_Error') )
-				$this->error = new WP_Error('500', $message);
+				$this->error = new WP_Error($error_code, $message);
 			else
 				$this->error = $message;
 			return false;
@@ -1173,15 +1182,19 @@ class db {
 	}
 
 	/**
-	 * Checks wether of not the database version is high enough to support the features WordPress uses
-	 * @global $wp_version
+	 * Whether or not MySQL database is at least the required minimum version.
+	 *
+	 * @since 2.5.0
+	 * @uses $wp_version
+	 *
+	 * @return WP_Error
 	 */
 	function check_database_version( $dbh_or_table = false ) {
 		global $wp_version;
-		// Make sure the server has MySQL 4.0
+		// Make sure the server has MySQL 4.1.2
 		$mysql_version = preg_replace( '|[^0-9\.]|', '', $this->db_version( $dbh_or_table ) );
-		if ( version_compare($mysql_version, '4.0.0', '<') )
-			return new WP_Error( 'database_version', sprintf(__('<strong>ERROR</strong>: WordPress %s requires MySQL 4.0.0 or higher'), $wp_version) );
+		if ( version_compare($mysql_version, '4.1.2', '<') )
+			return new WP_Error( 'database_version', sprintf(__('<strong>ERROR</strong>: WordPress %s requires MySQL 4.1.2 or higher'), $wp_version) );
 	}
 
 	/**
@@ -1507,8 +1520,9 @@ class wpdb extends db {
 	var $siteid = 0;
 	var $global_tables = array('blogs', 'signups', 'site', 'sitemeta', 'users', 'usermeta', 'sitecategories', 'registration_log', 'blog_versions');
 	var $blog_tables = array('posts', 'categories', 'post2cat', 'comments', 'links', 'link2cat', 'options',
-			'postmeta', 'terms', 'term_taxonomy', 'term_relationships');
-	var $blogs, $signups, $site, $sitemeta, $users, $usermeta, $sitecategories, $registration_log, $blog_versions, $posts, $categories, $post2cat, $comments, $links, $link2cat, $options, $postmeta, $terms, $term_taxonomy, $term_relationships;
+			'postmeta', 'terms', 'term_taxonomy', 'term_relationships', 'commentmeta');
+	var $old_tables = array('categories', 'post2cat', 'link2cat');
+	var $blogs, $signups, $site, $sitemeta, $users, $usermeta, $sitecategories, $registration_log, $blog_versions, $posts, $categories, $post2cat, $comments, $links, $link2cat, $options, $postmeta, $terms, $term_taxonomy, $term_relationships, $commentmeta;
 
 	function wpdb($dbuser, $dbpassword, $dbname, $dbhost) {
 		return $this->__construct($dbuser, $dbpassword, $dbname, $dbhost);
@@ -1529,6 +1543,8 @@ class wpdb extends db {
 			$args['collate'] = DB_COLLATE;
 		elseif ( $args['charset'] == 'utf8' )
 			$args['collate'] = 'utf8_general_ci';
+
+		$this->dbuser = $dbuser;
 
 		$args['save_queries'] = (bool) constant('SAVEQUERIES');
 
