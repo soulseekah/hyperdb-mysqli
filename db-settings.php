@@ -28,8 +28,8 @@ function localize_hostnames($array) {
  * @param string $ds Dataset: the name of the dataset. Just use "global" if you don't need horizontal partitioning.
  * @param int $part Partition: the vertical partition number (1, 2, 3, etc.). Use "0" if you don't need vertical partitioning.
  * @param string $dc Datacenter: where the database server is located. Airport codes are convenient. Use whatever.
- * @param int $read Read order: lower number means use this for more reads. Zero means no reads (e.g. for masters).
- * @param bool $write Write flag: is this server writable?
+ * @param int $read Read group: tries all servers in lowest number group before trying higher number group. Typical: 1 for slaves, 2 for master. This will cause reads to go to slaves unless all slaves are unreachable. Zero for no reads.
+ * @param bool $write Write flag: is this server writable? Works the same as $read. Typical: 1 for master, 0 for slaves.
  * @param string $host Internet address: host:port of server on internet. 
  * @param string $lhost Local address: host:port of server for use when in same datacenter. Leave empty if no local address exists.
  * @param string $name Database name.
