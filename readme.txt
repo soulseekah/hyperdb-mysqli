@@ -1,6 +1,6 @@
 === HyperDB ===
 Contributors: matt, andy, ryan, mdawaffe, automattic
-Tags: mysql, scaling, performance, availability
+Tags: mysql, scaling, performance, availability, WordPress.com
 Requires at least: 2.3
 Tested up to: 2.8.5
 Stable tag: trunk
