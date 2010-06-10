@@ -1,60 +1,35 @@
 <?php
 
-define('OBJECT', 'OBJECT', true);
-define('OBJECT_K', 'OBJECT_K', false);
-define('ARRAY_K', 'ARRAY_K', false);
-define('ARRAY_A', 'ARRAY_A', false);
-define('ARRAY_N', 'ARRAY_N', false);
+// HyperDB
+// This file should be installed at ABSPATH/wp-content/db.php
 
-if (!defined('SAVEQUERIES'))
-	define('SAVEQUERIES', false);
+/** Load the wpdb class while preventing instantiation **/
+$wpdb = true;
+require_once( ABSPATH . WPINC . '/wp-db.php' );
 
-if ( !class_exists('db') ) :
-class db {
-	/**
- 	 * Whether to show SQL/DB errors
- 	 *
- 	 * @since 0.71
- 	 * @access private
- 	 * @var bool
- 	 */
-	var $show_errors = false;
+if ( defined('DB_CONFIG_FILE') && file_exists( DB_CONFIG_FILE ) ) {
 
-	/**
- 	 * Whether to suppress errors during the DB bootstrapping.
- 	 *
- 	 * @access private
- 	 * @since {@internal Version Unknown}}
- 	 * @var bool
- 	 */
-	var $suppress_errors = false;
+	/** The config file was defined earlier. **/
 
-	/**
- 	 * The last error during query.
- 	 *
- 	 * @since {@internal Version Unknown}}
- 	 * @var string
- 	 */
-	var $last_error;
+} elseif ( file_exists( ABSPATH . 'db-config.php') ) {
 
-	/**
-	 * Amount of queries made
-	 *
-	 * @since 1.2.0
-	 * @access private
-	 * @var int
-	 */
-	var $num_queries = 0;
+	/** The config file resides in ABSPATH. **/
+	define( 'DB_CONFIG_FILE', ABSPATH . 'db-config.php' );
 
-	/**
- 	 * Saved result of the last query made
- 	 *
- 	 * @since 1.2.0
- 	 * @access private
- 	 * @var array
- 	 */
-	var $last_query;
+} elseif ( file_exists( dirname(ABSPATH) . '/db-config.php' ) && ! file_exists( dirname(ABSPATH) . '/wp-settings.php' ) ) {
 
+	/** The config file resides one level above ABSPATH but is not part of another install. **/
+	define( 'DB_CONFIG_FILE', dirname(ABSPATH) . '/db-config.php' );
+
+} else {
+
+	/** Lacking a config file, revert to the standard database class. **/
+	$wpdb = new wpdb( DB_USER, DB_PASSWORD, DB_NAME, DB_HOST );
+	return;
+
+}
+
+class hyperdb extends wpdb {
 	/**
 	 * The last table that was queried
 	 * @var string
@@ -65,86 +40,17 @@ class db {
 	 * After any SQL_CALC_FOUND_ROWS query, the query "SELECT FOUND_ROWS()"
 	 * is sent and the mysql result resource stored here. The next query
 	 * for FOUND_ROWS() will retrieve this. We do this to prevent any
-	 * intervening queries from making FOUND_ROWS() inaccessible.
+	 * intervening queries from making FOUND_ROWS() inaccessible. You may
+	 * prevent this by adding "NO_SELECT_FOUND_ROWS" in a comment.
 	 * @var resource
 	 */
 	var $last_found_rows_result;
 
 	/**
- 	 * Saved info on the table column
- 	 *
-	 * The results of mysql_fetch_field() on the last query result
- 	 *
- 	 * @since 1.2.0
- 	 * @access private
- 	 * @var array
- 	 */
-	var $col_info;
-	
-	/**
- 	 * Saved queries that were executed
- 	 *
- 	 * @since 1.5.0
- 	 * @access private
- 	 * @var array
- 	 */
-	var $queries = array();
-
-	/**
-	 * Format specifiers for DB columns. Columns not listed here default to %s.  Initialized in wp-settings.php.
-	 *
-	 * Keys are colmn names, values are format types: 'ID' => '%d'
-	 *
-	 * @since 2.8.0
-	 * @see wpdb:prepare()
-	 * @see wpdb:insert()
-	 * @see wpdb:update()
-	 * @access public
-	 * @war array
-	 */
-	var $field_types = array();
-
-	/**
-	 * Whether to use the query log
+	 * Whether to store queries in an array. Useful for debugging and profiling.
 	 * @var bool
 	 */
 	var $save_queries = false;
-
-	/**
-	 * Database table columns charset
-	 *
-	 * @since 2.2.0
-	 * @access public
-	 * @var string
-	 */
-	var $charset;
-
-	/**
-	 * Database table columns collate
-	 *
-	 * @since 2.2.0
-	 * @access public
-	 * @var string
-	 */
-	var $collate;
-
-	/**
-	 * Whether to use mysql_real_escape_string
-	 *  
-	 * @since 2.8.0
-	 * @access public
-	 * @var bool
-	 */
-	var $real_escape = false;
-
-	/**
-	 * Database Username
-	 *
-	 * @since 2.9.0
-	 * @access private
-	 * @var string
-	 */
-	var $dbuser;
 
 	/**
 	 * The current mysql link resource
@@ -159,28 +65,22 @@ class db {
 	var $dbhs;
 
 	/**
-	 * If true, skip all the multi-db stuff
-	 * @var bool
-	 */
-	var $single_db = false;
-
-	/**
-	 * The connection info for a single db
+	 * The multi-dimensional array of datasets and servers
 	 * @var array
 	 */
-	var $db_server = array();
-
-	/**
-	 * The multi-dimensional array of datasets, partitions, and servers
-	 * @var array
-	 */
-	var $db_servers = array();
+	var $hyper_servers = array();
 
 	/**
 	 * Optional directory of tables and their datasets
 	 * @var array
 	 */
-	var $db_tables = array();
+	var $hyper_tables = array();
+
+	/**
+	 * Optional directory of callbacks to determine datasets from queries
+	 * @var array
+	 */
+	var $hyper_callbacks = array();
 
 	/**
 	 * Whether to use mysql_pconnect instead of mysql_connect
@@ -196,6 +96,12 @@ class db {
 	var $max_connections = 10;
 
 	/**
+	 * Whether to check with fsockopen prior to mysql_connect.
+	 * @var bool
+	 */
+	var $check_tcp_responsiveness = true;
+
+	/**
 	 * Send Reads To Masters. This disables slave connections while true.
 	 * @var bool
 	 */
@@ -206,6 +112,11 @@ class db {
 	 * @var array
 	 */
 	var $db_connections;
+
+	/**
+	 * The list of unclosed connections sorted by LRU
+	 */
+	var $open_connections = array();
 
 	/**
 	 * The host of the current dbh
@@ -242,7 +153,7 @@ class db {
 	/**
 	 * Triggers __construct() for backwards compatibility with PHP4
 	 */
-	function db($args = array()) {
+	function db( $args = null ) {
 		return $this->__construct($args);
 	}
 
@@ -250,216 +161,38 @@ class db {
 	 * Gets ready to make database connections
 	 * @param array db class vars
 	 */
-	function __construct($args = null ) {
+	function __construct( $args = null ) {
 		if ( is_array($args) )
 			foreach ( get_class_vars(__CLASS__) as $var => $value )
 				if ( isset($args[$var]) )
 					$this->$var = $args[$var];
-		if ( ! $this->single_db ) {
-			if ( empty($this->db_servers) && isset($GLOBALS['db_servers']) && is_array($GLOBALS['db_servers']) )
-				$this->db_servers =& $GLOBALS['db_servers'];
-			if ( empty($this->db_tables) && isset($GLOBALS['db_tables']) && is_array($GLOBALS['db_tables']) )
-				$this->db_tables =& $GLOBALS['db_tables'];
-		}
-		if ( empty($this->db_servers) ) {
-			if ( empty($this->db_server) )
-				$this->bail("No database servers have been set up.");
-			else
-				$this->single_db = true;
-		}
-	}
-
-	function _weak_escape($string) {
-		return addslashes($string);
-	}
-
-	function _real_escape($string) {
-		if ( $this->dbh && $this->real_escape )
-			return mysql_real_escape_string( $string, $this->dbh );
-		else
-			return addslashes( $string );
-	}
-
-	function _escape($data) {
-		if ( is_array($data) ) {
-			foreach ( (array) $data as $k => $v ) {
-				if ( is_array($v) )
-					$data[$k] = $this->_escape( $v );
-				else
-					$data[$k] = $this->_real_escape( $v );
-			}
-		} else {
-			$data = $this->_real_escape( $data );
-		}
-
-		return $data;
 	}
 
 	/**
-	 * Escapes content for insertion into the database using addslashes(), for security
-	 *
-	 * @since 0.71
-	 *
-	 * @param string|array $data
-	 * @return string query safe string
+	 * Add the connection parameters for a database
 	 */
-	function escape($data) {
-		if ( is_array($data) ) {
-			foreach ( (array) $data as $k => $v ) {
-				if ( is_array($v) )
-					$data[$k] = $this->escape( $v );
-				else
-					$data[$k] = $this->_weak_escape( $v );
-			}
-		} else {
-			$data = $this->_weak_escape( $data );
-		}
-
-		return $data;
+	function add_database( $db ) {
+		extract($db, EXTR_SKIP);
+		isset($dataset) or $dataset = 'global';
+		isset($read)    or $read = 1;
+		isset($write)   or $write = 1;
+		unset($db['dataset'], $db['read'], $db['write']);
+		$read and $this->hyper_servers[ $dataset ][ 'read' ][ $read ][] = $db;
+		$write and $this->hyper_servers[ $dataset ][ 'write' ][ $write ][] = $db;
 	}
 
 	/**
-	 * Escapes content by reference for insertion into the database, for security
-	 *
-	 * @since 2.3.0
-	 *
-	 * @param string $s
+	 * Specify the dateset where a table is found
 	 */
-	function escape_by_ref(&$string) {
-		$string = $this->_real_escape( $string );
+	function add_table( $dataset, $table ) {
+		$this->hyper_tables[ $table ] = $dataset;
 	}
 
 	/**
-	 * Escapes array recursively for insertion into the database, for security
-	 * @param array $array
+	 * Add a callback to examine queries and determine dataset.
 	 */
-	function escape_deep( $array ) {
-		return is_array($array) ? array_map(array(&$this, 'escape_deep'), $array) : $this->escape( $array );
-	}
-
-	/**
-	 * Prepares a SQL query for safe execution.  Uses sprintf()-like syntax.
-	 *
-	 * This function only supports a small subset of the sprintf syntax; it only supports %d (decimal number), %s (string).
-	 * Does not support sign, padding, alignment, width or precision specifiers.
-	 * Does not support argument numbering/swapping.
-	 *
-	 * May be called like {@link http://php.net/sprintf sprintf()} or like {@link http://php.net/vsprintf vsprintf()}.
-	 *
-	 * Both %d and %s should be left unquoted in the query string.
-	 *
-	 * <code>
-	 * wpdb::prepare( "SELECT * FROM `table` WHERE `column` = %s AND `field` = %d", "foo", 1337 )
-	 * </code>
-	 *
-	 * @link http://php.net/sprintf Description of syntax.
-	 * @since 2.3.0
-	 *
-	 * @param string $query Query statement with sprintf()-like placeholders
-	 * @param array|mixed $args The array of variables to substitute into the query's placeholders if being called like {@link http://php.net/vsprintf vsprintf()}, or the first variable to substitute into the query's placeholders if being called like {@link http://php.net/sprintf sprintf()}.
-	 * @param mixed $args,... further variables to substitute into the query's placeholders if being called like {@link http://php.net/sprintf sprintf()}.
-	 * @return null|string Sanitized query string
-	 */
-	function prepare($query = null) { // ( $query, *$args )
-		if ( is_null( $query ) )
-			return;
-		$args = func_get_args();
-		array_shift($args);
-		// If args were passed as an array (as in vsprintf), move them up
-		if ( isset($args[0]) && is_array($args[0]) )
-			$args = $args[0];
-		$query = str_replace("'%s'", '%s', $query); // in case someone mistakenly already singlequoted it
-		$query = str_replace('"%s"', '%s', $query); // doublequote unquoting
-		$query = str_replace('%s', "'%s'", $query); // quote the strings
-		array_walk($args, array(&$this, 'escape_by_ref'));
-		return @vsprintf($query, $args);
-	}
-
-	/**
-	 * Get SQL/DB error
-	 * @param string $str Error string
-	 */
-	function get_error( $str = '' ) {
-		if ( empty($str) ) {
-			if ( $this->last_error )
-				$str = $this->last_error;
-			else
-				return false;
-		}
-
-		$error_str = "WordPress database error $str for query $this->last_query";
-
-		if ( $caller = $this->get_caller() )
-			$error_str .= " made by $caller";
-
-		if ( class_exists( 'WP_Error' ) )
-			return new WP_Error( 'db_query', $error_str, array( 'query' => $this->last_query, 'error' => $str, 'caller' => $caller ) );
-		else
-			return array( 'query' => $this->last_query, 'error' => $str, 'caller' => $caller, 'error_str' => $error_str );
-	}
-
-	/**
-	 * Print SQL/DB error
-	 * @param string $str Error string
-	 */
-	function print_error($str = '') {
-		if ( $this->suppress_errors )
-			return false;
-
-		$error = $this->get_error( $str );
-		if ( is_object( $error ) && is_a( $error, 'WP_Error' ) ) {
-			$err = $error->get_error_data();
-			$err['error_str'] = $error->get_error_message();
-		} else {
-			$err =& $error;
-		}
-
-		$log_file = ini_get('error_log');
-		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) && function_exists( 'error_log' ) )
-			error_log($err['error_str'], 0);
-
-		// Is error output turned on or not
-		if ( !$this->show_errors )
-			return false;
-
-		$str = htmlspecialchars($err['str'], ENT_QUOTES);
-		$query = htmlspecialchars($err['query'], ENT_QUOTES);
-
-		// If there is an error then take note of it
-		print "<div id='error'>
-		<p class='dberror'><strong>Database error:</strong> [$str]<br />
-		<code>$query</code></p>
-		</div>";
-	}
-
-	/**
-	 * Turn error output on or off
-	 * @param bool $show
-	 * @return bool previous setting
-	 */
-	function show_errors( $show = true ) {
-		$errors = $this->show_errors;
-		$this->show_errors = $show;
-		return $errors;
-	}
-
-	/**
-	 * Turn error output off
-	 * @return bool previous setting of show_errors
-	 */
-	function hide_errors() {
-		return $this->show_errors(false);
-	}
-
-	/**
-	 * Turn error logging on or off
-	 * @param bool $suppress
-	 * @return bool previous setting
-	 */
-	function suppress_errors( $suppress = true ) {
-		$errors = $this->suppress_errors;
-		$this->suppress_errors = $suppress;
-		return $errors;
+	function add_callback( $callback ) {
+		$this->hyper_callbacks[] = $callback;
 	}
 
 	/**
@@ -514,9 +247,6 @@ class db {
 				. '|SHOW\s+(?:.*FROM|.*TABLE)'
 				. ')\s+`?(\w+)`?/is', $q, $maybe) )
 			return $maybe[1];
-
-		// All unmatched queries automatically fall to the global master
-		return '';
 	}
 
 	/**
@@ -525,7 +255,7 @@ class db {
 	 * @return bool
 	 */
 	function is_write_query( $q ) {
-		// Quick and dirty: only send SELECT statements to slaves
+		// Quick and dirty: only SELECT statements are considered read-only.
 		$q = ltrim($q, "\t (");
 		$word = strtoupper( substr( trim( $q ), 0, 6 ) );
 		return 'SELECT' != $word;
@@ -539,41 +269,16 @@ class db {
 	}
 
 	/**
-	 * Get the dataset and partition from the table name. E.g.:
-	 * wp_ds_{$dataset}_{$partition}_tablename where $partition is ctype_digit
-	 * wp_{$dataset}_{$hash}_tablename where $hash is 1-3 chars of ctype_xdigit
-	 * @param unknown_type $table
-	 * @return unknown
+	 * Callbacks are specified in the config. They must return a dataset
+	 * or an associative array with an element called 'dataset'.
 	 */
-	function get_ds_part_from_table($table) {
-		if ( substr( $table, 0, strlen( $this->prefix ) ) != $this->prefix ) {
-			return false;
-		} else if ( preg_match('/^' . $this->prefix . 'ds_([a-z0-9]+)_([0-9]+)_/', $table, $matches) ) {
-		// e.g. wp_ds_{$dataset}_{$partition}_stuff
-			$dataset = $matches[1];
-			$partition = $hash = $matches[2];
-		} else if ( preg_match('/^' . $this->prefix . '([a-z0-9]+)_([0-9a-f]{1,3})_/', $table, $matches) ) {
-		// e.g. wp_{$dataset}_{$padhexmod}_stuff
-			$dataset = $matches[1];
-			$hash = $matches[2];
-			$tableno = hexdec($hash);
-			$partitions = count($this->db_servers[$dataset]);
-			$partition = ( $tableno % $partitions ) + 1;
-		} else {
-			return false;
+	function run_callbacks( $query ) {
+		$args = array($query, &$this);
+		foreach ( $this->hyper_callbacks as $func ) {
+			$result = call_user_func_array($func, $args);
+			if ( isset($result) )
+				return $result;
 		}
-
-		return compact('dataset', 'hash', 'partition');
-	}
-
-	function get_dataset_from_table($table) {
-		if ( isset($this->db_tables[$table]) )
-			return $this->db_tables[$table];
-		foreach ( $this->db_tables as $pattern => $dataset ) {
-			if ( '/' == substr( $pattern, 0, 1 ) && preg_match( $pattern, $table ) ) 
-				return $dataset;
-		}
-		return false;
 	}
 
 	/**
@@ -583,196 +288,200 @@ class db {
 	 */
 	function &db_connect( $query = '' ) {
 		$connect_function = $this->persistent ? 'mysql_pconnect' : 'mysql_connect';
-		if ( $this->single_db ) {
+		if ( empty( $this->hyper_servers ) ) {
 			if ( is_resource( $this->dbh ) )
 				return $this->dbh;
-			$this->dbh = $connect_function($this->db_server['host'], $this->db_server['user'], $this->db_server['password'], true);
+			if (
+				!defined('DB_HOST')
+				|| !defined('DB_USER')
+				|| !defined('DB_PASSWORD')
+				|| !defined('DB_NAME') )
+				return $this->bail("We were unable to query because there was no database defined.");
+			$this->dbh = @ $connect_function(DB_HOST, DB_USER, DB_PASSWORD, true);
 			if ( ! is_resource( $this->dbh ) )
-				$this->bail("We were unable to connect to the database at {$this->db_server['host']}.");
-			if ( ! mysql_select_db($this->db_server['name'], $this->dbh) )
-				$this->bail("We were unable to select the database.");
-			if ( !empty( $this->charset ) ) {
+				return $this->bail("We were unable to connect to the database. (DB_HOST)");
+			if ( ! mysql_select_db(DB_NAME, $this->dbh) )
+				return $this->bail("We were unable to select the database.");
+			if ( ! empty( $this->charset ) ) {
 				$collation_query = "SET NAMES '$this->charset'";
 				if ( !empty( $this->collate ) )
 					$collation_query .= " COLLATE '$this->collate'";
 				mysql_query($collation_query, $this->dbh);
 			}
 			return $this->dbh;
+		}
+
+		if ( empty( $query ) )
+			return false;
+
+		$this->last_table = $this->table = $this->get_table_from_query($query);
+
+		if ( isset($this->hyper_tables[$this->table]) ) {
+			$dataset = $this->hyper_tables[$this->table];
+		} elseif ( null !== $result = $this->run_callbacks($query) ) {
+			if ( is_array($result) )
+				extract( $result, EXTR_OVERWRITE );
+			else
+				$dataset = $result;
+		}
+
+		if ( !isset($dataset) )
+			$dataset = 'global';
+
+		if ( !$dataset )
+			return $this->bail("Unable to determine which dataset to query. ($table)");
+
+		if ( isset($write) )
+			$this->write = $write;
+		else
+			$this->write = $this->is_write_query( $query );
+
+		// Avoid reading a slave after writing a master.
+		if ( $this->srtm || $this->write || array_key_exists("{$dataset}__w", $this->written_servers) ) {
+			$this->write = true;
+			$read_dbh = $dataset . '__r';
+			$dbhname = $dataset . '__w';
+			$operation = 'write';
 		} else {
-			if ( empty( $query ) )
-				return false;
+			$dbhname = $dataset . '__r';
+			$operation = 'read';
+		}
 
-			$write = $this->is_write_query( $query );
-			$table = $this->get_table_from_query( $query );
-			$this->last_table = $table;
-			$partition = 0;
+		if ( isset( $this->dbhs[$dbhname] ) && is_resource($this->dbhs[$dbhname]) ) { // We're already connected!
+			// Keep this connection at the top of the stack to prevent disconnecting frequently-used connections
+			if ( $k = array_search($dbhname, $this->open_connections) ) {
+				unset($this->open_connections[$k]);
+				$this->open_connections[] = $dbhname;
+			}
 
-			if ( is_array($this->db_tables) && $dataset = $this->get_dataset_from_table( $table ) ) {
-				$dbhname = $dataset;
-			} else if ( $ds_part = $this->get_ds_part_from_table($table) ) {
-				extract( $ds_part, EXTR_OVERWRITE );
-				$dbhname = "{$dataset}_{$partition}";
-				$_server['name'] = "{$dataset}_$hash";
+			// Using an existing connection, select the db we need and if that fails, disconnect and connect anew.
+			if ( ( isset($server['name']) && mysql_select_db($server['name'], $this->dbhs[$dbhname]) ) ||
+					( isset($this->used_servers[$dbhname]['db']) && mysql_select_db($this->used_servers[$dbhname]['db'], $this->dbhs[$dbhname]) ) ) {
+				$this->last_used_server = $this->used_servers[$dbhname];
+				$this->current_host = $this->dbh2host[$dbhname];
+				return $this->dbhs[$dbhname];
 			} else {
-				$dbhname = $dataset = 'global';
+				$this->disconnect($dbhname);
 			}
+		}
 
-			if ( $this->srtm || $write || array_key_exists("{$dbhname}_w", $this->written_servers) ) {
-				$read_dbh = $dbhname . '_r';
-				$dbhname .= '_w';
-				$operation = 'write';
+		if ( $this->write && defined( "MASTER_DB_DEAD" ) ) {
+			return $this->bail("We're updating the database, please try back in 5 minutes. If you are posting to your blog please hit the refresh button on your browser in a few minutes to post the data again. It will be posted as soon as the database is back online again.");
+		}
+
+		if ( empty($this->hyper_servers[$dataset][$operation]) )
+			return $this->bail("No databases available to $operation $table ($dataset)");
+
+		// Put the groups in order by priority
+		ksort($this->hyper_servers[$dataset][$operation]);
+
+		// Make a list of at least three eligible servers, repeating as necessary.
+		$servers = array();
+		do {
+			foreach ( $this->hyper_servers[$dataset][$operation] as $group => $items ) {
+				$keys = array_keys($items);
+				shuffle($keys);
+				foreach ( $keys as $key ) {
+					$servers[] = compact('group', 'key');
+				}
+			}
+		} while ( count($servers) > 0 && count($servers) < 3 );
+
+		if ( empty($servers) )
+			return $this->bail("No database servers were found to match the query. ($table, $dataset)");
+
+		// at the following index # we have no choice but to connect
+		$max_server_index = count($servers) - 1;
+
+		// Connect to a database server
+		foreach ( $servers as $group_key ) {
+			extract($group_key, EXTR_OVERWRITE);
+
+			// $host, $user, $password, $name, and possibly others
+			extract($this->hyper_servers[$dataset][$operation][$group][$key], EXTR_OVERWRITE);
+
+			// Overlay $server if it was extracted from a callback
+			if ( isset($server) && is_array($server) )
+				extract($server, EXTR_OVERWRITE);
+
+			$this->timer_start();
+
+			// make sure there's always a port #
+			if ( !isset($port) )
+				list($host, $port) = explode(':', $host);
+			if ( empty($port) )
+				$port = 3306;
+
+			// Use a default timeout of 200ms.
+			if ( !isset($timeout) )
+				$timeout = 0.2;
+
+			// connect if necessary or possible
+			if ( $this->write || $i == $max_server_index ||
+					( !$this->check_tcp_responsiveness ||
+					true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) ) ) {
+				$this->dbhs[$dbhname] = @ $connect_function( "$host:$port", $user, $password );
 			} else {
-				$dbhname .= '_r';
-				$operation = 'read';
+				$this->dbhs[$dbhname] = false;
 			}
 
-			if ( isset( $this->dbhs[$dbhname] ) && is_resource($this->dbhs[$dbhname]) ) { // We're already connected!
-				// Keep this connection at the top of the stack to prevent disconnecting frequently-used connections
-				if ( $k = array_search($dbhname, $this->open_connections) ) {
-					unset($this->open_connections[$k]);
-					$this->open_connections[] = $dbhname;
-				}
+			if ( is_resource($this->dbhs[$dbhname])
+					&& mysql_select_db( $name, $this->dbhs[$dbhname] ) ) {
+				++$servers[$i]['connects'];
+				$this->db_connections[] = array( "$user@$host:$port", number_format( ( $this->timer_stop() ), 7) );
+				$this->dbh2host[$dbhname] = $this->current_host = "$host:$port";
+				$this->open_connections[] = $dbhname;
+				break;
+			} else {
+				$error_details = array (
+					'referrer' => "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}",
+'server'=>$server,
+					'host' => $host,
+					'error' => mysql_error(),
+					'errno' => mysql_errno(),
+					'tcp_responsive' => $tcp === true ? 'true' : $tcp,
+				);
+				$msg = date( "Y-m-d H:i:s" ) . " Can't select $dbhname - ";
+				$msg .= "\n" . print_r($error_details, true);
 
-				// Using an existing connection, select the db we need and if that fails, disconnect and connect anew.
-				if ( ( isset($_server['name']) && mysql_select_db($_server['name'], $this->dbhs[$dbhname]) ) ||
-						( isset($this->used_servers[$dbhname]['db']) && mysql_select_db($this->used_servers[$dbhname]['db'], $this->dbhs[$dbhname]) ) ) {
-					$this->last_used_server = $this->used_servers[$dbhname];
-					$this->current_host = $this->dbh2host[$dbhname];
-					return $this->dbhs[$dbhname];
-				} else {
-					$this->disconnect($dbhname);
-				}
+				$this->print_error( $msg );
 			}
+		}
 
-			if ( $write && defined( "MASTER_DB_DEAD" ) ) {
-				$this->bail("We're updating the database, please try back in 5 minutes. If you are posting to your blog please hit the refresh button on your browser in a few minutes to post the data again. It will be posted as soon as the database is back online again.");
-			}
+		if ( ! is_resource( $this->dbhs[$dbhname] ) )
+			return $this->bail("Unable to connect to $host:$port to $operation table '$table' ($dataset)");
 
-			// Group eligible servers by R (plus 10,000 if remote)
-			$server_groups = array();
-			foreach ( $this->db_servers[$dataset][$partition] as $server ) {
-				// $o = $server['read'] or $server['write']. If false, don't use this server.
-				if ( !($o = $server[$operation]) )
-					continue;
+		if ( !empty($charset) )
+			$collation_query = "SET NAMES '$charset'";
+		elseif ( !empty($this->charset) )
+			$collation_query = "SET NAMES '$this->charset'";
+		if ( !empty($collation_query) && !empty($collate) )
+			$collation_query .= " COLLATE '$collate'";
+		if ( !empty($collation_query) && !empty($this->collation) )
+			$collation_query .= " COLLATE '$this->collation'";
+		mysql_query($collation_query, $this->dbhs[$dbhname]);
 
-				if ( $server['dc'] != DATACENTER )
-					$o += 10000;
+		$this->last_used_server = array( "server" => $host, "db" => $name );
 
-				if ( isset($_server) && is_array($_server) )
-					$server = array_merge($server, $_server);
+		$this->used_servers[$dbhname] = $this->last_used_server;
 
-				// Try the local hostname first when connecting within the DC
-				if ( $server['dc'] == DATACENTER && isset($server['lhost']) ) {
-					$lserver = $server;
-					$lserver['host'] = $lserver['lhost'];
-					$server_groups[$o - 0.5][] = $lserver;
-				}
+		// Close current and prevent future read-only connections to the written cluster
+		if ( $write ) {
+			if ( isset($db_clusters[$clustername]['read']) )
+				unset( $db_clusters[$clustername]['read'] );
 
-				$server_groups[$o][] = $server;
-			}
+			if ( is_resource($this->dbhs[$read_dbh]) && $this->dbhs[$read_dbh] != $this->dbhs[$dbhname] )
+				$this->disconnect( $read_dbh );
 
-			// Randomize each group and add its members to
-			$servers = array();
-			ksort($server_groups);
-			foreach ( $server_groups as $group ) {
-				if ( count($group) > 1 )
-					shuffle($group);
-				$servers = array_merge($servers, $group);
-			}
+			$this->dbhs[$read_dbh] = & $this->dbhs[$dbhname];
 
-			// at the following index # we have no choice but to connect
-			$max_server_index = count($servers) - 1;
+			$this->written_servers[$dbhname] = true;
+		}
 
-			// Connect to a database server
-			foreach ( $servers as $server_index => $server ) {
-				$this->timer_start();
-
-				// make sure there's always a port #
-				list($host, $port) = explode(':', $server['host']);
-				if ( empty($port) )
-					$port = 3306;
-
-				// reduce the timeout if the host is on the lan
-				$mctime = 0.2; // Default
-				if ( strtolower(substr($host, -3)) == 'lan' )
-					$mctime = 0.05;
-
-				// connect if necessary or possible
-				if ( $write || $server_index == $max_server_index || $this->check_tcp_responsiveness($host, $port, $mctime) ) {
-					$this->dbhs[$dbhname] = false;
-					$try_count = 0;
-					while ( $this->dbhs[$dbhname] === false ) {
-						$try_count++;
-						$this->dbhs[$dbhname] = $connect_function( "$host:$port", $server['user'], $server['password'] );
-						if ( $try_count == 4 ) {
-							break;
-						} else {
-							if ( $this->dbhs[$dbhname] === false )
-								// Possibility of waiting up to 3 seconds!
-								usleep( (500000 * $try_count) );
-						}
-					}
-				} else {
-					$this->dbhs[$dbhname] = false;
-				}
-
-				if ( $this->dbhs[$dbhname] && is_resource($this->dbhs[$dbhname]) ) {
-					$this->db_connections[] = array( "{$server['user']}@$host:$port", number_format( ( $this->timer_stop() ), 7) );
-					$this->dbh2host[$dbhname] = $this->current_host = "$host:$port";
-					$this->open_connections[] = $dbhname;
-					break;
-				} else {
-					$error_details = array (
-						'referrer' => "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}",
-						'host' => $host,
-						'error' => mysql_error(),
-						'errno' => mysql_errno(),
-						'tcp_responsive' => $this->tcp_responsive,
-					);
-					$msg = date( "Y-m-d H:i:s" ) . " Can't select $dbhname - ";
-					$msg .= "\n" . print_r($error_details, true);
-
-					$this->print_error( $msg );
-				}
-			} // end foreach ( $servers as $server )
-
-			if ( ! is_resource( $this->dbhs[$dbhname] ) )
-				return $this->bail("Unable to connect to $host:$port while querying table '$table' ($dbhname)");
-			if ( ! mysql_select_db( $server['name'], $this->dbhs[$dbhname] ) )
-				return $this->bail("Connected to $host:$port but unable to select database '{$server['name']}' while querying table '$table' ($dbhname)");
-
-			if ( !empty($server['charset']) )
-				$collation_query = "SET NAMES '{$server['charset']}'";
-			elseif ( !empty($this->charset) )
-				$collation_query = "SET NAMES '$this->charset'";
-			if ( !empty($collation_query) && !empty($server['collate']) )
-				$collation_query .= " COLLATE '{$server['collate']}'";
-			if ( !empty($collation_query) && !empty($this->collation) )
-				$collation_query .= " COLLATE '$this->collation'";
-			mysql_query($collation_query, $this->dbhs[$dbhname]);
-
-			$this->last_used_server = array( "server" => $server['host'], "db" => $server['name'] );
-
-			$this->used_servers[$dbhname] = $this->last_used_server;
-
-			// Close current and prevent future read-only connections to the written cluster
-			if ( $write ) {
-				if ( isset($db_clusters[$clustername]['read']) )
-					unset( $db_clusters[$clustername]['read'] );
-
-				if ( is_resource($this->dbhs[$read_dbh]) && $this->dbhs[$read_dbh] != $this->dbhs[$dbhname] )
-					$this->disconnect( $read_dbh );
-
-				$this->dbhs[$read_dbh] = & $this->dbhs[$dbhname];
-
-				$this->written_servers[$dbhname] = true;
-			}
-
-			while ( count($this->open_connections) > $this->max_connections ) {
-				$oldest_connection = array_shift($this->open_connections);
-				if ( $this->dbhs[$oldest_connection] != $this->dbhs[$dbhname] )
-					$this->disconnect($oldest_connection);
-			}
+		while ( !$this->persistent && count($this->open_connections) > $this->max_connections ) {
+			$oldest_connection = array_shift($this->open_connections);
+			if ( $this->dbhs[$oldest_connection] != $this->dbhs[$dbhname] )
+				$this->disconnect($oldest_connection);
 		}
 
 		return $this->dbhs[$dbhname];
@@ -796,12 +505,10 @@ class db {
 	 * Kill cached query results
 	 */
 	function flush() {
-		$this->last_result = array();
-		$this->col_info = null;
-		$this->last_query = null;
 		$this->last_error = '';
 		$this->last_table = '';
 		$this->num_rows = 0;
+		parent::flush();
 	}
 
 	/**
@@ -810,8 +517,7 @@ class db {
 	 * @return int number of rows
 	 */
 	function query($query) {
-		// filter the query, if filters are available
-		// NOTE: some queries are made before the plugins have been loaded, and thus cannot be filtered with this method
+		// some queries are made before the plugins have been loaded, and thus cannot be filtered with this method
 		if ( function_exists('apply_filters') )
 			$query = apply_filters('query', $query);
 
@@ -840,8 +546,14 @@ class db {
 			++$this->num_queries;
 
 			if ( preg_match('/^\s*SELECT\s+SQL_CALC_FOUND_ROWS\s/i', $query) ) {
-				$this->last_found_rows_result = mysql_query("SELECT FOUND_ROWS()", $this->dbh);
-				++$this->num_queries;
+				if ( false === strpos($query, "NO_SELECT_FOUND_ROWS") ) {
+					$this->last_found_rows_result = mysql_query("SELECT FOUND_ROWS()", $this->dbh);
+					++$this->num_queries;
+					if ( $this->save_queries )
+						$this->queries[] = array( $query, $this->timer_stop(), $this->get_caller() );
+				}
+			} else {
+				$this->last_found_rows_result = null;
 			}
 		}
 
@@ -890,299 +602,8 @@ class db {
 	}
 
 	/**
-	 * Insert a row into a table.
-	 *
-	 * <code>
-	 * wpdb::insert( 'table', array( 'column' => 'foo', 'field' => 1337 ), array( '%s', '%d' ) )
-	 * </code>
-	 *
-	 * @since 2.5.0
-	 * @see wpdb::prepare()
-	 *
-	 * @param string $table table name
-	 * @param array $data Data to insert (in column => value pairs).  Both $data columns and $data values should be "raw" (neither should be SQL escaped).
-	 * @param array|string $format (optional) An array of formats to be mapped to each of the value in $data.  If string, that format will be used for all of the values in $data.  A format is one of '%d', '%s' (decimal number, string).  If omitted, all values in $data will be treated as strings.
-	 * @return int|false The number of rows inserted, or false on error.
-	 */
-	function insert($table, $data, $format = null) {
-		$formats = $format = (array) $format;
-		$fields = array_keys($data);
-		$formatted_fields = array();
-		foreach ( $fields as $field ) {
-			if ( !empty($format) )
-				$form = ( $form = array_shift($formats) ) ? $form : $format[0];
-			elseif ( isset($this->field_types[$field]) )
-				$form = $this->field_types[$field];
-			else
-				$form = '%s';
-			$formatted_fields[] = $form;
-		}
-		$sql = "INSERT INTO `$table` (`" . implode( '`,`', $fields ) . "`) VALUES ('" . implode( "','", $formatted_fields ) . "')";
-		return $this->query( $this->prepare( $sql, $data) );
-	}
-
-
-	/**
-	 * Update a row in the table
-	 *
-	 * <code>
-	 * wpdb::update( 'table', array( 'column' => 'foo', 'field' => 1337 ), array( 'ID' => 1 ), array( '%s', '%d' ), array( '%d' ) )
-	 * </code>
-	 *
-	 * @since 2.5.0
-	 * @see wpdb::prepare()
-	 *
-	 * @param string $table table name
-	 * @param array $data Data to update (in column => value pairs).  Both $data columns and $data values should be "raw" (neither should be SQL escaped).
-	 * @param array $where A named array of WHERE clauses (in column => value pairs).  Multiple clauses will be joined with ANDs.  Both $where columns and $where values should be "raw".
-	 * @param array|string $format (optional) An array of formats to be mapped to each of the values in $data.  If string, that format will be used for all of the values in $data.  A format is one of '%d', '%s' (decimal number, string).  If omitted, all values in $data will be treated as strings.
-	 * @param array|string $format_where (optional) An array of formats to be mapped to each of the values in $where.  If string, that format will be used for all of  the items in $where.  A format is one of '%d', '%s' (decimal number, string).  If omitted, all values in $where will be treated as strings.
-	 * @return int|false The number of rows updated, or false on error.
-	 */
-	function update($table, $data, $where, $format = null, $where_format = null) {
-		if ( !is_array( $where ) )
-			return false;
-
-		$formats = $format = (array) $format;
-		$bits = $wheres = array();
-		foreach ( (array) array_keys($data) as $field ) {
-			if ( !empty($format) )
-				$form = ( $form = array_shift($formats) ) ? $form : $format[0];
-			elseif ( isset($this->field_types[$field]) )
-				$form = $this->field_types[$field];
-			else
-				$form = '%s';
-			$bits[] = "`$field` = {$form}";
-		}
-
-		$where_formats = $where_format = (array) $where_format;
-		foreach ( (array) array_keys($where) as $field ) {
-			if ( !empty($where_format) )
-				$form = ( $form = array_shift($where_formats) ) ? $form : $where_format[0];
-			elseif ( isset($this->field_types[$field]) )
-				$form = $this->field_types[$field];
-			else
-				$form = '%s';
-			$wheres[] = "`$field` = {$form}";
-		}
-
-		$sql = "UPDATE `$table` SET " . implode( ', ', $bits ) . ' WHERE ' . implode( ' AND ', $wheres );
-		return $this->query( $this->prepare( $sql, array_merge(array_values($data), array_values($where))) );
-	}
-
-	/**
-	 * Retrieve one variable from the database.
-	 *
-	 * Executes a SQL query and returns the value from the SQL result.
-	 * If the SQL result contains more than one column and/or more than one row, this function returns the value in the column and row specified.
-	 * If $query is null, this function returns the value in the specified column and row from the previous SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string|null $query SQL query.  If null, use the result from the previous query.
-	 * @param int $x (optional) Column of value to return.  Indexed from 0.
-	 * @param int $y (optional) Row of value to return.  Indexed from 0.
-	 * @return string Database query result
-	 */
-	function get_var($query=null, $x = 0, $y = 0) {
-		$this->func_call = "\$db->get_var(\"$query\",$x,$y)";
-		if ( $query )
-			$this->query($query);
-
-		// Extract var out of cached results based x,y vals
-		if ( !empty( $this->last_result[$y] ) ) {
-			$values = array_values(get_object_vars($this->last_result[$y]));
-		}
-
-		// If there is a value return it else return null
-		return (isset($values[$x]) && $values[$x]!=='') ? $values[$x] : null;
-	}
-
-	/**
-	 * Retrieve one row from the database.
-	 *
-	 * Executes a SQL query and returns the row from the SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string|null $query SQL query.
-	 * @param string $output (optional) one of ARRAY_A | ARRAY_N | OBJECT constants.  Return an associative array (column => value, ...), a numerically indexed array (0 => value, ...) or an object ( ->column = value ), respectively.
-	 * @param int $y (optional) Row to return.  Indexed from 0.
-	 * @return mixed Database query result in format specifed by $output
-	 */
-	function get_row($query = null, $output = OBJECT, $y = 0) {
-		$this->func_call = "\$db->get_row(\"$query\",$output,$y)";
-		if ( $query )
-			$this->query($query);
-		else
-			return null;
-
-		if ( !isset($this->last_result[$y]) )
-			return null;
-
-		if ( $output == OBJECT ) {
-			return $this->last_result[$y] ? $this->last_result[$y] : null;
-		} elseif ( $output == ARRAY_A ) {
-			return $this->last_result[$y] ? get_object_vars($this->last_result[$y]) : null;
-		} elseif ( $output == ARRAY_N ) {
-			return $this->last_result[$y] ? array_values(get_object_vars($this->last_result[$y])) : null;
-		} else {
-			$this->print_error(/*WP_I18N_DB_GETROW_ERROR*/" \$db->get_row(string query, output type, int offset) -- Output type must be one of: OBJECT, ARRAY_A, ARRAY_N"/*/WP_I18N_DB_GETROW_ERROR*/);
-		}
-	}
-
-	/**
-	 * Retrieve one column from the database.
-	 *
-	 * Executes a SQL query and returns the column from the SQL result.
-	 * If the SQL result contains more than one column, this function returns the column specified.
-	 * If $query is null, this function returns the specified column from the previous SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string|null $query SQL query.  If null, use the result from the previous query.
-	 * @param int $x Column to return.  Indexed from 0.
-	 * @return array Database query result.  Array indexed from 0 by SQL result row number.
-	 */
-	function get_col($query = null , $x = 0) {
-		if ( $query )
-			$this->query($query);
-
-		$new_array = array();
-		// Extract the column values
-		for ( $i=0; $i < count($this->last_result); $i++ ) {
-			$new_array[$i] = $this->get_var(null, $x, $i);
-		}
-		return $new_array;
-	}
-
-	/**
-	 * Retrieve an entire SQL result set from the database (i.e., many rows)
-	 *
-	 * Executes a SQL query and returns the entire SQL result.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $query SQL query.
-	 * @param string $output (optional) ane of ARRAY_A | ARRAY_N | ARRAY_K | OBJECT | OBJECT_K constants.  With one of the first three, return an array of rows indexed from 0 by SQL result row number.  Each row is an associative array (column => value, ...), a numerically indexed array (0 => value, ...), or an object. ( ->column = value ), respectively.  With OBJECT_K, return an associative array of row objects keyed by the value of each row's first column's value.  Duplicate keys are discarded.
-	 * @return mixed Database query results
-	 */
-	function get_results($query = null, $output = OBJECT) {
-		$this->func_call = "\$db->get_results(\"$query\", $output)";
-
-		if ( $query )
-			$this->query($query);
-		else
-			return null;
-
-		if ( $output == OBJECT ) {
-			// Return an integer-keyed array of row objects
-			return $this->last_result;
-		} elseif ( $output == OBJECT_K || $output == ARRAY_K ) {
-			// Return an array of row objects with keys from column 1
-			// (Duplicates are discarded)
-			$key = $this->col_info[0]->name;
-			foreach ( (array) $this->last_result as $row )
-				if ( !isset( $new_array[ $row->$key ] ) )
-					$new_array[ $row->$key ] = $row;
-			if ( $output == ARRAY_K )
-				return array_map('get_object_vars', $new_array);
-			return $new_array;
-		} elseif ( $output == ARRAY_A || $output == ARRAY_N ) {
-			// Return an integer-keyed array of...
-			if ( $this->last_result ) {
-				$i = 0;
-				foreach( (array) $this->last_result as $row ) {
-					if ( $output == ARRAY_N ) {
-						// ...integer-keyed row arrays
-						$new_array[$i] = array_values( get_object_vars( $row ) );
-					} else {
-						// ...column name-keyed row arrays
-						$new_array[$i] = get_object_vars( $row );
-					}
-					++$i;
-				}
-				return $new_array;
-			}
-		}
-	}
-
-	/**
-	 * Retrieve column metadata from the last query.
-	 *
-	 * @since 0.71
-	 *
-	 * @param string $info_type one of name, table, def, max_length, not_null, primary_key, multiple_key, unique_key, numeric, blob, type, unsigned, zerofill
-	 * @param int $col_offset 0: col name. 1: which table the col's in. 2: col's max length. 3: if the col is numeric. 4: col's type
-	 * @return mixed Column Results
-	 */
-	function get_col_info($info_type = 'name', $col_offset = -1) {
-		if ( $this->col_info ) {
-			if ( $col_offset == -1 ) {
-				$i = 0;
-				foreach( (array) $this->col_info as $col ) {
-					$new_array[$i] = $col->{$info_type};
-					$i++;
-				}
-				return $new_array;
-			} else {
-				return $this->col_info[$col_offset]->{$info_type};
-			}
-		}
-	}
-
-	/**
-	 * Starts the timer, for debugging purposes.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @return true
-	 */
-	function timer_start() {
-		$mtime = microtime();
-		$mtime = explode(' ', $mtime);
-		$this->time_start = $mtime[1] + $mtime[0];
-		return true;
-	}
-
-	/**
-	 * Stops the debugging timer.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @return int Total time spent on the query, in milliseconds
-	 */
-	function timer_stop() {
-		$mtime = microtime();
-		$mtime = explode(' ', $mtime);
-		$time_end = $mtime[1] + $mtime[0];
-		$time_total = $time_end - $this->time_start;
-		return $time_total;
-	}
-
-	/**
-	 * Wraps errors in a nice header and footer and dies.
-	 *
-	 * Will not die if wpdb::$show_errors is true
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $message
-	 * @return false|void
-	 */
-	function bail($message, $error_code = '500') {
-		if ( !$this->show_errors ) {
-			if ( class_exists('WP_Error') )
-				$this->error = new WP_Error($error_code, $message);
-			else
-				$this->error = $message;
-			return false;
-		}
-		wp_die($message);
-	}
-
-	/**
 	 * Whether or not MySQL database is at least the required minimum version.
+	 * The additional argument allows the caller to check a specific database.
 	 *
 	 * @since 2.5.0
 	 * @uses $wp_version
@@ -1200,14 +621,16 @@ class db {
 	/**
 	 * This function is called when WordPress is generating the table schema to determine wether or not the current database
 	 * supports or needs the collation statements.
+	 * The additional argument allows the caller to check a specific database.
 	 * @return bool
 	 */
-	function supports_collation() {
-		return $this->has_cap( 'collation' );
+	function supports_collation( $dbh_or_table = false ) {
+		return $this->has_cap( 'collation', $dbh_or_table );
 	}
 
 	/**
 	 * Generic function to determine if a database supports a particular feature
+	 * The additional argument allows the caller to check a specific database.
 	 * @param string $db_cap the feature
 	 * @param false|string|resource $dbh_or_table the databaese (the current database, the database housing the specified table, or the database of the mysql resource)
 	 * @return bool
@@ -1300,453 +723,24 @@ class db {
 					return false;
 			}
 		}
-	        $socket = fsockopen($host, $port, $errno, $errstr, $float_timeout);
+	        $socket = @ fsockopen($host, $port, $errno, $errstr, $float_timeout);
 	        if ( $socket === false ) {
 			if ( $use_apc )
 				apc_store($apc_key, 'down', $apc_ttl);
-			$this->tcp_responsive = "false [ > $float_timeout] ($errno) '$errstr'";
-	                return false;
+			return "[ > $float_timeout ] ($errno) '$errstr'";
 		}
 		fclose($socket);
 		if ( $use_apc )
 			apc_store($apc_key, 'up', $apc_ttl);
-		$this->tcp_responsive = 'true';
 	        return true;
 	}
-} // class db
-endif;
 
-if ( defined( 'BACKPRESS_PATH' ) ) :
-class BPDB_Hyper extends db {
-	function BPDB_Hyper() {
-		$args = func_get_args();
-		return call_user_func_array( array(&$this, '__construct'), $args );
-	}
+	// Helper functions for configuration
+	
+} // class hyperdb
 
-	function __construct( $args ) { // no private _init method
-		if ( 4 == func_num_args() )
-			$args = array( 'user' => $args, 'password' => func_get_arg(1), 'name' => func_get_arg(2), 'host' => func_get_arg(3) );
+$wpdb = new hyperdb();
 
-		$defaults = array(
-			'user' => false,
-			'password' => false,
-			'name' => false,
-			'host' => 'localhost',
-			'charset' => false,
-			'collate' => false,
-			'errors' => false
-		);
-
-		$args = wp_parse_args( $args, $defaults );
-
-		$hyper = array();
-
-		switch ( $args['errors'] ) :
-		case 'show' :
-			$hyper['show_errors'] = true;
-			break;
-		case 'suppress' :
-			$hyper['suppress_errors'] = true;
-			break;
-		endswitch;
-
-		if ( $args['name'] ) {
-			$hyper['db_server'] = array(
-				'user' => $args['user'],
-				'password' => $args['password'],
-				'name' => $args['name'],
-				'host' => $args['host']
-			);
-		}
-
-		$hyper['save_queries'] = (bool) @constant('SAVEQUERIES');
-
-		// HyperDB does not support per-table charsets, collations
-		foreach ( array( 'charset', 'collate' ) as $arg )
-			if ( isset($args[$arg]) )
-				$hyper[$arg] = $args[$arg];
-
-		return parent::__construct($hyper);
-	}
-
-	/**
-	 * Sets the prefix of the database tables
-	 * @param string prefix
-	 * @param false|array tables (optional: false)
-	 *	table identifiers are array keys
-	 *	array values
-	 *		empty: set prefix: array( 'posts' => false, 'users' => false, ... )
-	 *		string: set to that array value: array( 'posts' => 'my_posts', 'users' => 'my_users' )
-	 *		array: array[0] is DB identifier, array[1] is table name: array( 'posts' => array( 'global', 'my_posts' ), 'users' => array( 'users', 'my_users' ) )
-	 *	OR array values (with numeric keys): array( 'posts', 'users', ... )
-	 *
-	 * @return string the previous prefix (mostly only meaningful if all $table parameter was false)
-	 */
-	// Combines BPDB::set_prefix and BPDB_Multi::set_prefix
-	function set_prefix( $prefix, $tables = false ) {
-		if ( !$prefix )
-			return false;
-		if ( preg_match('|[^a-z0-9_]|i', $prefix) )
-			return new WP_Error('invalid_db_prefix', 'Invalid database prefix'); // No gettext here
-
-		$old_prefix = $this->prefix;
-
-		if ( $tables && is_array($tables) ) {
-			$_tables =& $tables;
-		} else {
-			$_tables =& $this->tables;
-			$this->prefix = $prefix;
-		}
-
-		foreach ( $_tables as $key => $value ) {
-			if ( is_numeric( $key ) ) { // array( 'posts', 'users', ... )
-				$this->$value = $prefix . $value;
-			} elseif ( !$value ) { // array( 'posts' => false, 'users' => false, ... )
-				$this->$key = $prefix . $key;
-			} elseif ( is_string($value) ) { // array( 'posts' => 'my_posts', 'users' => 'my_users' )
-				$this->$key = $value;
-			} elseif ( is_array($value) ) { // array( 'posts' => array( 'global', 'my_posts' ), 'users' => array( 'users', 'my_users' ) )
-				$this->add_db_table( $value[0], $value[1] );
-				$this->$key = $value[1];
-			}
-		}
-
-		return $old_prefix;
-	}
-
-	/**
-	 * Print SQL/DB error
-	 * @param string $str Error string
-	 */
-	function print_error($str = '') {
-		if ( $this->suppress_errors )
-			return false;
-
-		$error = $this->get_error( $str );
-		if ( is_object( $error ) && is_a( $error, 'WP_Error' ) ) {
-			$err = $error->get_error_data();
-			$err['error_str'] = sprintf( BPDB__ERROR_STRING, $err['str'], $err['query'], $err['caller'] );
-		} else {
-			$err =& $error;
-		}
-
-		$log_file = ini_get('error_log');
-		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) && function_exists( 'error_log' ) )
-			error_log($err['error_str'], 0);
-
-		// Is error output turned on or not
-		if ( !$this->show_errors )
-			return false;
-
-		$str = htmlspecialchars($err['str'], ENT_QUOTES);
-		$query = htmlspecialchars($err['query'], ENT_QUOTES);
-		$caller = htmlspecialchars($err['caller'], ENT_QUOTES);
-
-		// If there is an error then take note of it
-		printf( BPDB__ERROR_HTML, $str, $query, $caller );
-	}
-
-	/**
-	 * Add a database server's information.  Does not automatically connect.
-	 * @param string $ds Dataset: the name of the dataset.
-	 * @param array $args
-	 *	ds  => string Dataset: the name of the dataset. Just use "global" if you don't need horizontal partitioning.
-	 *	part => string Partition: the vertical partition number (1, 2, 3, etc.). Use "0" if you don't need vertical partitioning.
-	 *	dc => string Datacenter: where the database server is located. Airport codes are convenient. Use whatever.
-	 *	read => int Read order: lower number means use this for more reads. Zero means no reads (e.g. for masters).
-	 *	write => int Write flag: is this server writable?
-	 *	host => string Internet address: host:port of server on internet. 
-	 *	lhost => string Local address: host:port of server for use when in same datacenter. Leave empty if no local address exists.
-	 *	name => string Database name.
-	 *	user => string Database user.
-	 *	password => string Database password.
-	 *	charset => string Database default charset.  Used in a SET NAMES query. (optional) (ignored)
-	 *	collate => string Database default collation.  If charset supplied, optionally added to the SET NAMES query (optional) (ignored)
-	 */
-	function add_db_server( $ds, $args = null ) {
-		$defaults = array(
-			'part' => 0,
-			'dc' => '',
-			'read' => 1,
-			'write' => 1,
-			'host' => 'localhost',
-			'lhost' => '',
-			'name' => false,
-			'user' => false,
-			'password' => false,
-			'charset' => false,
-			'collate' => false
-		);
-
-		// We're adding another DB so we're no longer single_db.  Put single_db data into db_servers
-		// during the load procedure, bbPress starts out single but may end up multi
-		// (at the moment, bbPress stores the multi info in the global "single" DB)
-		if ( $this->single_db ) {
-			$this->single_db = false;
-			$this->add_db_server( 'global', $this->db_server );
-			$this->db_server = array();
-			$this->dbhs['global'] =& $this->dbh;
-			$this->db_servers =& $GLOBALS['db_servers'];
-		}
-
-		extract( wp_parse_args( $args, $defaults ), EXTR_SKIP );
-
-		add_db_server( $ds, $part, $dc, $read, $write, $host, $lhost, $name, $user, $password );
-	}
-
-	/**
-	 * Maps a table to a dataset.
-	 * @param string $ds Dataset: the name of the dataset.
-	 * @param string $table
-	 */
-	function add_db_table( $ds, $table ) {
-		add_db_table( $ds, $table );
-		if ( empty( $this->db_tables ) )
-			$this->db_tables =& $GLOBALS['db_tables'];
-	}
-}
-
-// BackPress creates the DB object on its own.  Do not create one here
-
-else : // BackPress
-
-
-if ( !class_exists( 'wpdb' ) ) :
-if ( defined('WPMU') ) :
-class wpdb extends db {
-	var $prefix = '';
-	var $ready = true;
-	var $blogid = 0;
-	var $siteid = 0;
-	var $global_tables = array('blogs', 'signups', 'site', 'sitemeta', 'users', 'usermeta', 'sitecategories', 'registration_log', 'blog_versions');
-	var $blog_tables = array('posts', 'categories', 'post2cat', 'comments', 'links', 'link2cat', 'options',
-			'postmeta', 'terms', 'term_taxonomy', 'term_relationships', 'commentmeta');
-	var $old_tables = array('categories', 'post2cat', 'link2cat');
-	var $blogs, $signups, $site, $sitemeta, $users, $usermeta, $sitecategories, $registration_log, $blog_versions, $posts, $categories, $post2cat, $comments, $links, $link2cat, $options, $postmeta, $terms, $term_taxonomy, $term_relationships, $commentmeta;
-
-	function wpdb($dbuser, $dbpassword, $dbname, $dbhost) {
-		return $this->__construct($dbuser, $dbpassword, $dbname, $dbhost);
-	}
-
-	function __construct($dbuser, $dbpassword, $dbname, $dbhost) {
-		$args = array();
-
-		if ( defined('WP_DEBUG') and WP_DEBUG == true )
-			$args['show_errors'] = true;
-
-		if ( defined('DB_CHARSET') )
-			$args['charset'] = DB_CHARSET;
-		else
-			$args['charset'] = 'utf8';
-
-		if ( defined('DB_COLLATE') )
-			$args['collate'] = DB_COLLATE;
-		elseif ( $args['charset'] == 'utf8' )
-			$args['collate'] = 'utf8_general_ci';
-
-		$this->dbuser = $dbuser;
-
-		$args['save_queries'] = (bool) constant('SAVEQUERIES');
-
-		$args['db_server'] = array(
-			'user'     => $dbuser,
-			'password' => $dbpassword,
-			'name'     => $dbname,
-			'host'     => $dbhost
-		);
-
-		return parent::__construct($args);
-	}
-
-	function set_prefix($prefix) {
-
-		if ( preg_match('|[^a-z0-9_]|i', $prefix) )
-			return new WP_Error('invalid_db_prefix', /*WP_I18N_DB_BAD_PREFIX*/'Invalid database prefix'/*/WP_I18N_DB_BAD_PREFIX*/);
-
-		$old_prefix = $this->base_prefix;
-		$this->base_prefix = $prefix;
-		foreach ( $this->global_tables as $table )
-			$this->$table = $prefix . $table;
-
-		if ( empty($this->blogid) )
-			return $old_prefix;
-
-		$this->prefix = $this->get_blog_prefix( $this->blogid );
-
-		foreach ( $this->blog_tables as $table )
-			$this->$table = $this->prefix . $table;
-
-		if ( defined('CUSTOM_USER_TABLE') )
-			$this->users = CUSTOM_USER_TABLE;
-
-		if ( defined('CUSTOM_USER_META_TABLE') )
-			$this->usermeta = CUSTOM_USER_META_TABLE;
-
-		return $old_prefix;
-	}
-
-	function set_blog_id($blog_id, $site_id = '') {
-		if ( !empty($site_id) )
-			$this->siteid = $site_id;
-
-		$old_blog_id = $this->blogid;
-		$this->blogid = $blog_id;
-
-		$this->prefix = $this->get_blog_prefix( $this->blogid );
-
-		foreach ( $this->blog_tables as $table )
-			$this->$table = $this->prefix . $table;
-
-		return $old_blog_id;
-	}
-
-	function get_blog_prefix( $blog_id = '' ) {
-		if ( $blog_id ) {
-			return $this->base_prefix . $blog_id . '_';
-		} else {
-			return $this->prefix;
-		}
-	}
-
-	function print_error($str = '') {
-		global $EZSQL_ERROR;
-
-		if (!$str) $str = mysql_error($this->dbh);
-		$EZSQL_ERROR[] = array ('query' => $this->last_query, 'error_str' => $str);
-
-		if ( $this->suppress_errors )
-			return false;
-
-		if ( $caller = $this->get_caller() )
-			$error_str = sprintf(/*WP_I18N_DB_QUERY_ERROR_FULL*/'WordPress database error %1$s for query %2$s made by %3$s'/*/WP_I18N_DB_QUERY_ERROR_FULL*/, $str, $this->last_query, $caller);
-		else
-			$error_str = sprintf(/*WP_I18N_DB_QUERY_ERROR*/'WordPress database error %1$s for query %2$s'/*/WP_I18N_DB_QUERY_ERROR*/, $str, $this->last_query);
-
-		$log_error = true;
-		if ( ! function_exists('error_log') )
-			$log_error = false;
-
-		$log_file = @ini_get('error_log');
-		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) )
-			$log_error = false;
-
-		if ( $log_error )
-			@error_log($error_str, 0);
-
-		// Is error output turned on or not..
-		if ( !$this->show_errors )
-			return false;
-
-		// If there is an error then take note of it
-		$msg = "WordPress database error: [$str]\n{$this->query}\n";
-		if( defined( 'ERRORLOGFILE' ) )
-			error_log( $msg, 3, CONSTANT( 'ERRORLOGFILE' ) );
-		if( defined( 'DIEONDBERROR' ) )
-			die( $msg );
-	}
-}
-else :
-class wpdb extends db {
-	var $prefix = '';
-	var $tables = array('users', 'usermeta', 'posts', 'categories', 'post2cat', 'comments', 'links', 'link2cat', 'options',
-			'postmeta', 'terms', 'term_taxonomy', 'term_relationships');
-	var $users, $usermeta, $posts, $categories, $post2cat, $comments, $links, $link2cat, $options, $postmeta, $terms, $term_taxonomy, $term_relationships;
-
-	var $ready = true;
-
-	function wpdb($dbuser, $dbpassword, $dbname, $dbhost) {
-		return $this->__construct($dbuser, $dbpassword, $dbname, $dbhost);
-	}
-
-	function __construct($dbuser, $dbpassword, $dbname, $dbhost) {
-		$args = array();
-
-		if ( defined('WP_DEBUG') and WP_DEBUG == true )
-			$args['show_errors'] = true;
-
-		if ( defined('DB_CHARSET') )
-			$args['charset'] = DB_CHARSET;
-
-		if ( defined('DB_COLLATE') )
-			$args['collate'] = DB_COLLATE;
-
-		$args['save_queries'] = (bool) constant('SAVEQUERIES');
-
-		$args['db_server'] = array(
-			'user'     => $dbuser,
-			'password' => $dbpassword,
-			'name'     => $dbname,
-			'host'     => $dbhost
-		);
-
-		return parent::__construct($args);
-	}
-
-	function set_prefix($prefix) {
-		if ( preg_match('|[^a-z0-9_]|i', $prefix) )
-			return new WP_Error('invalid_db_prefix', 'Invalid database prefix'); // No gettext here
-
-		$old_prefix = $this->prefix;
-		$this->prefix = $prefix;
-
-		foreach ( $this->tables as $table )
-			$this->$table = $this->prefix . $table;
-
-		if ( defined('CUSTOM_USER_TABLE') )
-			$this->users = CUSTOM_USER_TABLE;
-
-		if ( defined('CUSTOM_USER_META_TABLE') )
-			$this->usermeta = CUSTOM_USER_META_TABLE;
-
-		return $old_prefix;
-	}
-
-	function print_error($str = '') {
-		global $EZSQL_ERROR;
-
-		if (!$str) $str = mysql_error($this->dbh);
-		$EZSQL_ERROR[] = array ('query' => $this->last_query, 'error_str' => $str);
-
-		if ( $this->suppress_errors )
-			return false;
-
-		if ( $caller = $this->get_caller() )
-			$error_str = sprintf(/*WP_I18N_DB_QUERY_ERROR_FULL*/'WordPress database error %1$s for query %2$s made by %3$s'/*/WP_I18N_DB_QUERY_ERROR_FULL*/, $str, $this->last_query, $caller);
-		else
-			$error_str = sprintf(/*WP_I18N_DB_QUERY_ERROR*/'WordPress database error %1$s for query %2$s'/*/WP_I18N_DB_QUERY_ERROR*/, $str, $this->last_query);
-
-		$log_error = true;
-		if ( ! function_exists('error_log') )
-			$log_error = false;
-
-		$log_file = @ini_get('error_log');
-		if ( !empty($log_file) && ('syslog' != $log_file) && !is_writable($log_file) )
-			$log_error = false;
-
-		if ( $log_error )
-			@error_log($error_str, 0);
-
-		// Is error output turned on or not..
-		if ( !$this->show_errors )
-			return false;
-
-		$str = htmlspecialchars($str, ENT_QUOTES);
-		$query = htmlspecialchars($this->last_query, ENT_QUOTES);
-
-		// If there is an error then take note of it
-		print "<div id='error'>
-		<p class='wpdberror'><strong>WordPress database error:</strong> [$str]<br />
-		<code>$query</code></p>
-		</div>";
-	}
-} // class wpdb
-endif;
-endif;
-
-// WordPress and WordPress MU do not create their own DB object.  Create one here.
-if ( ! isset($wpdb) )
-	$wpdb = new wpdb(DB_USER, DB_PASSWORD, DB_NAME, DB_HOST);
-
-endif; // BackPress
+require( DB_CONFIG_FILE );
 
 ?>
