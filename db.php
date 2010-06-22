@@ -83,6 +83,12 @@ class hyperdb extends wpdb {
 	var $hyper_callbacks = array();
 
 	/**
+	 * Custom callback to save debug info in $this->queries
+	 * @var callable
+	 */
+	var $save_query_callback = null;
+
+	/**
 	 * Whether to use mysql_pconnect instead of mysql_connect
 	 * @var bool
 	 */
@@ -102,10 +108,17 @@ class hyperdb extends wpdb {
 	var $check_tcp_responsiveness = true;
 
 	/**
-	 * Send Reads To Masters. This disables slave connections while true.
-	 * @var bool
+	 * Minimum number of connections to try before bailing
+	 * @var int
 	 */
-	var $srtm = false;
+	var $min_tries = 3;
+
+	/**
+	 * Send Reads To Masters. This disables slave connections while true.
+	 * Otherwise it is an array of written tables.
+	 * @var array
+	 */
+	var $srtm = array();
 
 	/**
 	 * The log of db connections made and the time each one took
@@ -119,18 +132,6 @@ class hyperdb extends wpdb {
 	var $open_connections = array();
 
 	/**
-	 * The host of the current dbh
-	 * @var string
-	 */
-	var $current_host;
-
-	/**
-	 * Lookup array (dbhname => host:port)
-	 * @var array
-	 */
-	var $dbh2host = array();
-
-	/**
 	 * The last server used and the database name selected
 	 * @var array
 	 */
@@ -142,13 +143,6 @@ class hyperdb extends wpdb {
 	 * @var array
 	 */
 	var $used_servers = array();
-
-	/**
-	 * Lookup array (dbhname => true) indicating that new links to dbhname
-	 * should be sent to the master
-	 * @var array
-	 */
-	var $written_servers = array();
 
 	/**
 	 * Triggers __construct() for backwards compatibility with PHP4
@@ -176,9 +170,11 @@ class hyperdb extends wpdb {
 		isset($dataset) or $dataset = 'global';
 		isset($read)    or $read = 1;
 		isset($write)   or $write = 1;
-		unset($db['dataset'], $db['read'], $db['write']);
-		$read and $this->hyper_servers[ $dataset ][ 'read' ][ $read ][] = $db;
-		$write and $this->hyper_servers[ $dataset ][ 'write' ][ $write ][] = $db;
+		unset($db['dataset']);
+		if ( $read )
+			$this->hyper_servers[ $dataset ][ 'read' ][ $read ][] = $db;
+		if ( $write )
+			$this->hyper_servers[ $dataset ][ 'write' ][ $write ][] = $db;
 	}
 
 	/**
@@ -318,51 +314,85 @@ class hyperdb extends wpdb {
 
 		if ( isset($this->hyper_tables[$this->table]) ) {
 			$dataset = $this->hyper_tables[$this->table];
-		} elseif ( null !== $result = $this->run_callbacks($query) ) {
-			if ( is_array($result) )
-				extract( $result, EXTR_OVERWRITE );
+			$this->callback_result = null;
+		} elseif ( null !== $this->callback_result = $this->run_callbacks($query) ) {
+			if ( is_array($this->callback_result) )
+				extract( $this->callback_result, EXTR_OVERWRITE );
 			else
-				$dataset = $result;
+				$dataset = $this->callback_result;
 		}
 
 		if ( !isset($dataset) )
 			$dataset = 'global';
 
 		if ( !$dataset )
-			return $this->bail("Unable to determine which dataset to query. ($table)");
-
-		if ( isset($write) )
-			$this->write = $write;
+			return $this->bail("Unable to determine which dataset to query. ($this->table)");
 		else
-			$this->write = $this->is_write_query( $query );
+			$this->dataset = $dataset;
 
-		// Avoid reading a slave after writing a master.
-		if ( $this->srtm || $this->write || array_key_exists("{$dataset}__w", $this->written_servers) ) {
-			$this->write = true;
-			$read_dbh = $dataset . '__r';
-			$dbhname = $dataset . '__w';
+		// Determine whether the query must be sent to the master (a writable server)
+		if ( $use_master || $this->srtm === true || isset($this->srtm[$this->table]) ) {
+			$use_master = true;
+		} elseif ( $is_write = $this->is_write_query($query) ) {
+			$use_master = true;
+			if ( is_array($this->srtm) )
+				$this->srtm[$this->table] = true;
+		} elseif ( !isset($use_master) && is_array($this->srtm) && !empty($this->srtm) ) {
+			// Detect queries that have a join in the srtm array.
+			$pattern = '/' . implode('|', array_keys($this->srtm)) . '/i';
+			if ( preg_match($pattern, substr($query, 0, 1000)) )
+				$use_master = true;
+			else
+				$use_master = false;
+		} else {
+			$use_master = false;
+		}
+
+		if ( $use_master ) {
+			$this->dbhname = $dbhname = $dataset . '__w';
 			$operation = 'write';
 		} else {
-			$dbhname = $dataset . '__r';
+			$this->dbhname = $dbhname = $dataset . '__r';
 			$operation = 'read';
 		}
 
-		if ( isset( $this->dbhs[$dbhname] ) && is_resource($this->dbhs[$dbhname]) ) { // We're already connected!
+		// Try to reuse an existing connection
+		while ( is_resource($this->dbhs[$dbhname]) ) {
+			// Find the connection for incrementing counters
+			foreach ( array_keys($this->db_connections) as $i )
+				if ( $this->db_connections[$i]['dbhname'] == $dbhname )
+					$conn =& $this->db_connections[$i];
+
+			if ( isset($server['name']) ) {
+				$name = $server['name'];
+				// A callback has specified a database name so it's possible the existing connection selected a different one.
+				if ( $name != $this->used_servers[$dbhname]['name'] ) {
+					if ( !mysql_select_db($name, $this->dbhs[$dbhname]) ) {
+						// this can happen when the user varies and lacks permission on the $name database
+						++$conn['disconnect (select failed)'];
+						$this->disconnect($dbhname);
+						break;
+					}
+					$this->used_servers[$dbhname]['name'] = $name;
+				}
+			} else {
+				$name = $this->used_servers[$dbhname]['name'];
+			}
+
+			$this->current_host = $this->dbh2host[$dbhname];
+
 			// Keep this connection at the top of the stack to prevent disconnecting frequently-used connections
 			if ( $k = array_search($dbhname, $this->open_connections) ) {
 				unset($this->open_connections[$k]);
 				$this->open_connections[] = $dbhname;
 			}
 
-			// Using an existing connection, select the db we need and if that fails, disconnect and connect anew.
-			if ( ( isset($server['name']) && mysql_select_db($server['name'], $this->dbhs[$dbhname]) ) ||
-					( isset($this->used_servers[$dbhname]['db']) && mysql_select_db($this->used_servers[$dbhname]['db'], $this->dbhs[$dbhname]) ) ) {
-				$this->last_used_server = $this->used_servers[$dbhname];
-				$this->current_host = $this->dbh2host[$dbhname];
-				return $this->dbhs[$dbhname];
-			} else {
-				$this->disconnect($dbhname);
-			}
+			$this->last_used_server = $this->used_servers[$dbhname];
+			$this->last_connection = compact('dbhname', 'name');
+
+			++$conn['queries'];
+
+			return $this->dbhs[$dbhname];
 		}
 
 		if ( $this->write && defined( "MASTER_DB_DEAD" ) ) {
@@ -370,12 +400,12 @@ class hyperdb extends wpdb {
 		}
 
 		if ( empty($this->hyper_servers[$dataset][$operation]) )
-			return $this->bail("No databases available to $operation $table ($dataset)");
+			return $this->bail("No databases available with $this->table ($dataset)");
 
 		// Put the groups in order by priority
 		ksort($this->hyper_servers[$dataset][$operation]);
 
-		// Make a list of at least three eligible servers, repeating as necessary.
+		// Make a list of at least $this->min_tries connections to try, repeating as necessary.
 		$servers = array();
 		do {
 			foreach ( $this->hyper_servers[$dataset][$operation] as $group => $items ) {
@@ -385,54 +415,68 @@ class hyperdb extends wpdb {
 					$servers[] = compact('group', 'key');
 				}
 			}
-		} while ( count($servers) > 0 && count($servers) < 3 );
-
-		if ( empty($servers) )
-			return $this->bail("No database servers were found to match the query. ($table, $dataset)");
-
-		// at the following index # we have no choice but to connect
-		$max_server_index = count($servers) - 1;
+			$tries_remaining = count($servers);
+			if ( !$tries_remaining )
+				return $this->bail("No database servers were found to match the query. ($this->table, $dataset)");
+		} while ( $tries_remaining < $this->min_tries );
 
 		// Connect to a database server
 		foreach ( $servers as $group_key ) {
+			--$tries_remaining;
+
+			// $group, $key
 			extract($group_key, EXTR_OVERWRITE);
 
-			// $host, $user, $password, $name, and possibly others
+			// $host, $user, $password, $name, $read, $write [ $connect_function, $timeout ]
 			extract($this->hyper_servers[$dataset][$operation][$group][$key], EXTR_OVERWRITE);
+
+			list($host, $port) = explode(':', $host);
+
+			// Split host:port into $host and $port
+			if ( strpos($host, ':') )
+				list($host, $port) = explode(':', $host);
 
 			// Overlay $server if it was extracted from a callback
 			if ( isset($server) && is_array($server) )
 				extract($server, EXTR_OVERWRITE);
 
-			$this->timer_start();
-
-			// make sure there's always a port #
-			if ( !isset($port) )
+			// Split again in case $server had host:port
+			if ( strpos($host, ':') )
 				list($host, $port) = explode(':', $host);
+
+			// Make sure there's always a port number
 			if ( empty($port) )
 				$port = 3306;
 
-			// Use a default timeout of 200ms.
+			// Use a default timeout of 200ms
 			if ( !isset($timeout) )
 				$timeout = 0.2;
 
-			// connect if necessary or possible
-			if ( $this->write || $i == $max_server_index ||
-					( !$this->check_tcp_responsiveness ||
-					true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) ) ) {
-				$this->dbhs[$dbhname] = @ $connect_function( "$host:$port", $user, $password );
+			$this->timer_start();
+
+			// Connect if necessary or possible
+			$tcp = null;
+			if ( !$tries_remaining || !$this->check_tcp_responsiveness || true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) ) {
+				$this->dbhs[$dbhname] = @ $connect_function( "$host:$port", $user, $password, true );
 			} else {
 				$this->dbhs[$dbhname] = false;
 			}
 
-			if ( is_resource($this->dbhs[$dbhname])
-					&& mysql_select_db( $name, $this->dbhs[$dbhname] ) ) {
-				++$servers[$i]['connects'];
-				$this->db_connections[] = array( "$user@$host:$port", number_format( ( $this->timer_stop() ), 7) );
-				$this->dbh2host[$dbhname] = $this->current_host = "$host:$port";
+			$elapsed = $this->timer_stop();
+
+			if ( is_resource($this->dbhs[$dbhname]) && mysql_select_db( $name, $this->dbhs[$dbhname] ) ) {
+				$success = true;
+				$this->current_host = $host;
+				$this->dbh2host[$dbhname] = $host;
+				$queries = 1;
+				$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success', 'queries');
+				$this->db_connections[] = $this->last_connection;
 				$this->open_connections[] = $dbhname;
 				break;
 			} else {
+				$success = false;
+				$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success');
+				$this->db_connections[] = $this->last_connection;
 				$error_details = array (
 					'referrer' => "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}",
 'server'=>$server,
@@ -449,7 +493,7 @@ class hyperdb extends wpdb {
 		}
 
 		if ( ! is_resource( $this->dbhs[$dbhname] ) )
-			return $this->bail("Unable to connect to $host:$port to $operation table '$table' ($dataset)");
+			return $this->bail("Unable to connect to $host:$port to $operation table '$this->table' ($dataset)");
 
 		if ( !empty($charset) )
 			$collation_query = "SET NAMES '$charset'";
@@ -461,22 +505,9 @@ class hyperdb extends wpdb {
 			$collation_query .= " COLLATE '$this->collation'";
 		mysql_query($collation_query, $this->dbhs[$dbhname]);
 
-		$this->last_used_server = array( "server" => $host, "db" => $name );
+		$this->last_used_server = compact('host', 'user', 'name', 'read', 'write');
 
 		$this->used_servers[$dbhname] = $this->last_used_server;
-
-		// Close current and prevent future read-only connections to the written cluster
-		if ( $write ) {
-			if ( isset($db_clusters[$clustername]['read']) )
-				unset( $db_clusters[$clustername]['read'] );
-
-			if ( is_resource($this->dbhs[$read_dbh]) && $this->dbhs[$read_dbh] != $this->dbhs[$dbhname] )
-				$this->disconnect( $read_dbh );
-
-			$this->dbhs[$read_dbh] = & $this->dbhs[$dbhname];
-
-			$this->written_servers[$dbhname] = true;
-		}
 
 		while ( !$this->persistent && count($this->open_connections) > $this->max_connections ) {
 			$oldest_connection = array_shift($this->open_connections);
@@ -489,7 +520,7 @@ class hyperdb extends wpdb {
 
 	/**
 	 * Disconnect and remove connection from open connections list
-	 * @param string $dbhname
+	 * @param string $tdbhname
 	 */
 	function disconnect($dbhname) {
 		if ( $k = array_search($dbhname, $this->open_connections) )
@@ -531,34 +562,39 @@ class hyperdb extends wpdb {
 		// Keep track of the last query for debug..
 		$this->last_query = $query;
 
-		if ( $this->save_queries )
-			$this->timer_start();
-
 		if ( preg_match('/^\s*SELECT\s+FOUND_ROWS(\s*)/i', $query) && is_resource($this->last_found_rows_result) ) {
 			$this->result = $this->last_found_rows_result;
+			$elapsed = 0;
 		} else {
 			$this->dbh = $this->db_connect( $query );
 
 			if ( ! is_resource($this->dbh) )
 				return false;
 
+			$this->timer_start();
 			$this->result = mysql_query($query, $this->dbh);
+			$elapsed = $this->timer_stop();
 			++$this->num_queries;
 
 			if ( preg_match('/^\s*SELECT\s+SQL_CALC_FOUND_ROWS\s/i', $query) ) {
 				if ( false === strpos($query, "NO_SELECT_FOUND_ROWS") ) {
+					$this->timer_start();
 					$this->last_found_rows_result = mysql_query("SELECT FOUND_ROWS()", $this->dbh);
+					$elapsed += $this->timer_stop();
 					++$this->num_queries;
-					if ( $this->save_queries )
-						$this->queries[] = array( $query, $this->timer_stop(), $this->get_caller() );
+					$query .= "; SELECT FOUND_ROWS()";
 				}
 			} else {
 				$this->last_found_rows_result = null;
 			}
-		}
 
-		if ( $this->save_queries )
-			$this->queries[] = array( $query, $this->timer_stop(), $this->get_caller() );
+			if ( $this->save_queries ) {
+				if ( is_callable($this->save_query_callback) )
+					$this->queries[] = call_user_func_array( $this->save_query_callback, array( $query, $elapsed, debug_backtrace(), &$this ) );
+				else
+					$this->queries[] = array( $query, $elapsed, $this->get_caller() );
+			}
+		}
 
 		// If there is an error then take note of it
 		if ( $this->last_error = mysql_error($this->dbh) ) {
