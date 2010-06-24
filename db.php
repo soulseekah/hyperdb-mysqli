@@ -392,6 +392,12 @@ class hyperdb extends wpdb {
 
 			++$conn['queries'];
 
+			if ( !mysql_ping($this->dbhs[$dbhname]) ) {
+				++$conn['disconnect (ping failed)'];
+				$this->disconnect($dbhname);
+				break;
+			}
+
 			return $this->dbhs[$dbhname];
 		}
 
@@ -466,8 +472,8 @@ class hyperdb extends wpdb {
 
 			if ( is_resource($this->dbhs[$dbhname]) && mysql_select_db( $name, $this->dbhs[$dbhname] ) ) {
 				$success = true;
-				$this->current_host = $host;
-				$this->dbh2host[$dbhname] = $host;
+				$this->current_host = "$host:$port";
+				$this->dbh2host[$dbhname] = "$host:$port";
 				$queries = 1;
 				$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success', 'queries');
 				$this->db_connections[] = $this->last_connection;

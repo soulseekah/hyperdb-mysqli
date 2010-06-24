@@ -82,4 +82,8 @@ One way HyperDB differs from WPDB is that HyperDB does not attempt to connect to
 * Removed native support for datacenters and partitions. The same effects are accomplished by read/write parameters and dataset names.
 * Removed preg pattern support from $db_tables. Use callbacks instead.
 * Removed delay between connection retries and avoid immediate retry of same server when others are available to try.
-
+* Added connection stats.
+* Added save_query_callback for custom debug logging.
+* Refined SRTM granularity. Now only send reads to masters when the written table is involved.
+* Improved connection reuse logic and added mysql_ping to recover from "server has gone away".
+* Added min_tries to configure the minimum number of connection attempts before bailing.
