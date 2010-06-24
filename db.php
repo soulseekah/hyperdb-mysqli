@@ -390,13 +390,13 @@ class hyperdb extends wpdb {
 			$this->last_used_server = $this->used_servers[$dbhname];
 			$this->last_connection = compact('dbhname', 'name');
 
-			++$conn['queries'];
-
 			if ( !mysql_ping($this->dbhs[$dbhname]) ) {
 				++$conn['disconnect (ping failed)'];
 				$this->disconnect($dbhname);
 				break;
 			}
+
+			++$conn['queries'];
 
 			return $this->dbhs[$dbhname];
 		}
@@ -543,7 +543,6 @@ class hyperdb extends wpdb {
 	 */
 	function flush() {
 		$this->last_error = '';
-		$this->last_table = '';
 		$this->num_rows = 0;
 		parent::flush();
 	}
