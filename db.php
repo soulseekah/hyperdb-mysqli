@@ -462,7 +462,7 @@ class hyperdb extends wpdb {
 
 			// Connect if necessary or possible
 			$tcp = null;
-			if ( !$tries_remaining || !$this->check_tcp_responsiveness || true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) ) {
+			if ( $use_master || !$tries_remaining || !$this->check_tcp_responsiveness || true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) ) {
 				$this->dbhs[$dbhname] = @ $connect_function( "$host:$port", $user, $password, true );
 			} else {
 				$this->dbhs[$dbhname] = false;
