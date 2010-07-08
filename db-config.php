@@ -275,10 +275,10 @@ function add_db_server($dataset, $part, $dc, $read, $write, $host, $lhost, $name
 	// connect over the private interface before the public one.
 	if ( !empty( $lhost ) ) {
 		if ( $read )
-			$server['read'] = $read - 0.5;
+			$database['read'] = $read - 0.5;
 		if ( $write )
-			$server['write'] = $write - 0.5;
-		$wpdb->add_server($server);
+			$database['write'] = $write - 0.5;
+		$wpdb->add_database( $database );
 	}
 }
 */
