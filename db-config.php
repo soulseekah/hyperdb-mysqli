@@ -264,7 +264,10 @@ function add_db_server($dataset, $part, $dc, $read, $write, $host, $lhost, $name
 		$timeout = 0.7;
 	}
 
-	$dataset = $dataset . '_' . $part;
+	// You'll need a hyperdb::add_callback() callback function to use partitioning.
+	// $wpdb->add_callback( 'my_func' );
+	if ( $part )
+		$dataset = $dataset . '_' . $part;
 
 	$database = compact('dataset', 'read', 'write', 'host', 'name', 'user', 'password', 'timeout');
 
