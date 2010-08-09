@@ -147,7 +147,7 @@ class hyperdb extends wpdb {
 	/**
 	 * Triggers __construct() for backwards compatibility with PHP4
 	 */
-	function db( $args = null ) {
+	function hyperdb( $args = null ) {
 		return $this->__construct($args);
 	}
 
