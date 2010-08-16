@@ -145,6 +145,12 @@ class hyperdb extends wpdb {
 	var $used_servers = array();
 
 	/**
+	 * Whether to save debug_backtrace in save_query_callback. You may wish
+	 * to disable this, e.g. when tracing out-of-memory problems.
+	 */
+	var $save_backtrace = true;
+
+	/**
 	 * Triggers __construct() for backwards compatibility with PHP4
 	 */
 	function hyperdb( $args = null ) {
@@ -595,7 +601,7 @@ class hyperdb extends wpdb {
 
 			if ( $this->save_queries ) {
 				if ( is_callable($this->save_query_callback) )
-					$this->queries[] = call_user_func_array( $this->save_query_callback, array( $query, $elapsed, debug_backtrace(), &$this ) );
+					$this->queries[] = call_user_func_array( $this->save_query_callback, array( $query, $elapsed, $this->save_backtrace ? debug_backtrace( false ) : null, &$this ) );
 				else
 					$this->queries[] = array( $query, $elapsed, $this->get_caller() );
 			}
@@ -717,7 +723,7 @@ class hyperdb extends wpdb {
 		if ( !is_callable('debug_backtrace') )
 			return '';
 
-		$bt = debug_backtrace();
+		$bt = debug_backtrace( false );
 		$caller = '';
 
 		foreach ( (array) $bt as $trace ) {
