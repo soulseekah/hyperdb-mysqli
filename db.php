@@ -529,6 +529,8 @@ class hyperdb extends wpdb {
 
 		$this->set_charset($this->dbhs[$dbhname], $charset, $collate);
 
+		$this->dbh = $this->dbhs[$dbhname]; // needed by $wpdb->_real_escape()
+
 		$this->last_used_server = compact('host', 'user', 'name', 'read', 'write');
 
 		$this->used_servers[$dbhname] = $this->last_used_server;
