@@ -511,7 +511,7 @@ class hyperdb extends wpdb {
 				$this->db_connections[] = $this->last_connection;
 				$error_details = array (
 					'referrer' => "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}",
-'server'=>$server,
+					'server' => $server,
 					'host' => $host,
 					'error' => mysql_error(),
 					'errno' => mysql_errno(),
