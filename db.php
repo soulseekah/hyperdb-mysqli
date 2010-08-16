@@ -279,8 +279,7 @@ class hyperdb extends wpdb {
 	function is_write_query( $q ) {
 		// Quick and dirty: only SELECT statements are considered read-only.
 		$q = ltrim($q, "\t (");
-		$word = strtoupper( substr( trim( $q ), 0, 6 ) );
-		return 'SELECT' != $word;
+		return !preg_match('/^(?:SELECT|SHOW|DESCRIBE|EXPLAIN)\s/i', $q);
 	}
 
 	/**
