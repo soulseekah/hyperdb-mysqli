@@ -166,6 +166,26 @@ class hyperdb extends wpdb {
 			foreach ( get_class_vars(__CLASS__) as $var => $value )
 				if ( isset($args[$var]) )
 					$this->$var = $args[$var];
+
+		$this->init_charset();
+	}
+
+	/**
+	 * Sets $this->charset and $this->collate
+	 */
+	function init_charset() {
+		if ( is_multisite() ) {
+			$this->charset = 'utf8';
+			if ( defined( 'DB_COLLATE' ) && DB_COLLATE )
+				$this->collate = DB_COLLATE;
+			else
+				$this->collate = 'utf8_general_ci';
+		} elseif ( defined( 'DB_COLLATE' ) ) {
+			$this->collate = DB_COLLATE;
+		}
+
+		if ( defined( 'DB_CHARSET' ) )
+			$this->charset = DB_CHARSET;
 	}
 
 	/**
@@ -507,15 +527,7 @@ class hyperdb extends wpdb {
 		if ( ! is_resource( $this->dbhs[$dbhname] ) )
 			return $this->bail("Unable to connect to $host:$port to $operation table '$this->table' ($dataset)");
 
-		if ( !empty($charset) )
-			$collation_query = "SET NAMES '$charset'";
-		elseif ( !empty($this->charset) )
-			$collation_query = "SET NAMES '$this->charset'";
-		if ( !empty($collation_query) && !empty($collate) )
-			$collation_query .= " COLLATE '$collate'";
-		if ( !empty($collation_query) && !empty($this->collation) )
-			$collation_query .= " COLLATE '$this->collation'";
-		mysql_query($collation_query, $this->dbhs[$dbhname]);
+		$this->set_charset($this->dbhs[$dbhname], $charset, $collate);
 
 		$this->last_used_server = compact('host', 'user', 'name', 'read', 'write');
 
@@ -528,6 +540,30 @@ class hyperdb extends wpdb {
 		}
 
 		return $this->dbhs[$dbhname];
+	}
+
+	/**
+	 * Sets the connection's character set.
+	 * @param resource $dbh     The resource given by mysql_connect
+	 * @param string   $charset The character set (optional)
+	 * @param string   $collate The collation (optional)
+	 */
+	function set_charset($dbh, $charset = null, $collate = null) {
+		if ( !isset($charset) )
+			$charset = $this->charset;
+		if ( !isset($collate) )
+			$collate = $this->collate;
+		if ( $this->has_cap( 'collation' ) && !empty( $charset ) ) {
+			if ( function_exists( 'mysql_set_charset' ) ) {
+				mysql_set_charset( $charset, $dbh );
+				$this->real_escape = true;
+			} else {
+				$query = $this->prepare( 'SET NAMES %s', $charset );
+				if ( ! empty( $collate ) )
+					$query .= $this->prepare( ' COLLATE %s', $collate );
+				mysql_query( $query, $dbh );
+			}
+		}
 	}
 
 	/**
