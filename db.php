@@ -554,8 +554,8 @@ class hyperdb extends wpdb {
 			$charset = $this->charset;
 		if ( !isset($collate) )
 			$collate = $this->collate;
-		if ( $this->has_cap( 'collation' ) && !empty( $charset ) ) {
-			if ( function_exists( 'mysql_set_charset' ) ) {
+		if ( $this->has_cap( 'collation', $dbh ) && !empty( $charset ) ) {
+			if ( function_exists( 'mysql_set_charset' ) && $this->has_cap( 'set_charset', $dbh ) ) {
 				mysql_set_charset( $charset, $dbh );
 				$this->real_escape = true;
 			} else {
@@ -727,7 +727,8 @@ class hyperdb extends wpdb {
 		case 'group_concat' :
 		case 'subqueries' :
 			return version_compare($version, '4.1', '>=');
-			break;
+		case 'set_charset' :
+			return version_compare($version, '5.0.7', '>=');
 		endswitch;
 
 		return false;
