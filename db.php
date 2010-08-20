@@ -174,7 +174,7 @@ class hyperdb extends wpdb {
 	 * Sets $this->charset and $this->collate
 	 */
 	function init_charset() {
-		if ( is_multisite() ) {
+		if ( function_exists('is_multisite') && is_multisite() ) {
 			$this->charset = 'utf8';
 			if ( defined( 'DB_COLLATE' ) && DB_COLLATE )
 				$this->collate = DB_COLLATE;
