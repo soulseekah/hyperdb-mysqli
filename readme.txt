@@ -87,3 +87,4 @@ One way HyperDB differs from WPDB is that HyperDB does not attempt to connect to
 * Refined SRTM granularity. Now only send reads to masters when the written table is involved.
 * Improved connection reuse logic and added mysql_ping to recover from "server has gone away".
 * Added min_tries to configure the minimum number of connection attempts before bailing.
+* Added WPDB_PATH constant. Define this if you'd rather not use ABSPATH . WPINC . '/wp-db.php'.

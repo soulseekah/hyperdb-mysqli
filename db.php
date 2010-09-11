@@ -5,7 +5,10 @@
 
 /** Load the wpdb class while preventing instantiation **/
 $wpdb = true;
-require_once( ABSPATH . WPINC . '/wp-db.php' );
+if ( defined('WPDB_PATH') )
+	require_once(WPDB_PATH);
+else
+	require_once( ABSPATH . WPINC . '/wp-db.php' );
 
 if ( defined('DB_CONFIG_FILE') && file_exists( DB_CONFIG_FILE ) ) {
 
