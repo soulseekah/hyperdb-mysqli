@@ -793,34 +793,11 @@ class hyperdb extends wpdb {
 	 * @return (bool) true when $host:$post responds within $float_timeout seconds, else (bool) false
 	 */
 	function check_tcp_responsiveness($host, $port, $float_timeout) {
-		if ( 1 == 2 && function_exists('apc_store') ) {
-			$use_apc = true;
-			$apc_key = "{$host}{$port}";
-			$apc_ttl = 10;
-		} else {
-			$use_apc = false;
-		}
-		if ( $use_apc ) {
-			$cached_value=apc_fetch($apc_key);
-			switch ( $cached_value ) {
-				case 'up':
-					$this->tcp_responsive = 'true';
-					return true;
-				case 'down':
-					$this->tcp_responsive = 'false';
-					return false;
-			}
-		}
-	        $socket = @ fsockopen($host, $port, $errno, $errstr, $float_timeout);
-	        if ( $socket === false ) {
-			if ( $use_apc )
-				apc_store($apc_key, 'down', $apc_ttl);
+		$socket = @ fsockopen($host, $port, $errno, $errstr, $float_timeout);
+		if ( $socket === false )
 			return "[ > $float_timeout ] ($errno) '$errstr'";
-		}
 		fclose($socket);
-		if ( $use_apc )
-			apc_store($apc_key, 'up', $apc_ttl);
-	        return true;
+	    return true;
 	}
 
 	// Helper functions for configuration

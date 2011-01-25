@@ -58,14 +58,14 @@ $wpdb->persistent = false;
 $wpdb->max_connections = 10;
 
 /**
- * tcp_responsiveness_check
+ * check_tcp_responsiveness
  * Enables checking TCP responsiveness by fsockopen prior to mysql_connect or
  * mysql_pconnect. This was added because PHP's mysql functions do not provide
  * a variable timeout setting. Disabling it may improve average performance by
  * a very tiny margin but lose protection against connections failing slowly.
  * Default: true
  */
-$wpdb->tcp_responsiveness_check = true;
+$wpdb->check_tcp_responsiveness = true;
 
 /** Configuration Functions **/
 
