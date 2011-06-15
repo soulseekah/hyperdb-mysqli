@@ -1,8 +1,8 @@
 === HyperDB ===
-Contributors: matt, andy, ryan, mdawaffe, automattic
+Contributors: matt, andy, ryan, mdawaffe, vnsavage, automattic
 Tags: mysql, scaling, performance, availability, WordPress.com
 Requires at least: 2.3
-Tested up to: 3.0
+Tested up to: 3.1.3
 Stable tag: trunk
 
 HyperDB is an advanced database class that supports replication, failover, load balancing, and partitioning.
@@ -69,6 +69,11 @@ None that has been measured. HyperDB does at least try again before giving up co
 One way HyperDB differs from WPDB is that HyperDB does not attempt to connect to a database until a query is made. Thus a site with sufficiently aggressive persistent caching could remain read-only accessible despite the database becoming unreachable.
 
 == Changelog ==
+
+= 1.1 =
+* Extended callbacks functionality
+* Added connection error callback
+* Added replication lag detection support
 
 = 1.0 =
 * Removed support for WPMU and BackPress.

@@ -29,7 +29,6 @@
  * one or more callback functions that translate table names to datasets.
  */
 
-
 /** Variable settings **/
 
 /**
@@ -73,16 +72,18 @@ $wpdb->check_tcp_responsiveness = true;
  * $wpdb->add_database( $database );
  *
  * $database is an associative array with these parameters:
- * host     (required) Hostname with optional :port. Default port is 3306.
- * user     (required) MySQL user name.
- * password (required) MySQL user password.
- * name     (required) MySQL database name.
- * read     (optional) Whether server is readable. Default is 1 (readable).
- *                     Also used to assign preference. See "Network topology".
- * write    (optional) Whether server is writable. Default is 1 (writable).
- *                     Also used to assign preference in multi-master mode.
- * dataset  (optional) Name of dataset. Default is 'global'.
- * timeout  (optional) Seconds to wait for TCP responsiveness. Default is 0.2
+ * host          (required) Hostname with optional :port. Default port is 3306.
+ * user          (required) MySQL user name.
+ * password      (required) MySQL user password.
+ * name          (required) MySQL database name.
+ * read          (optional) Whether server is readable. Default is 1 (readable).
+ *						   Also used to assign preference. See "Network topology".
+ * write         (optional) Whether server is writable. Default is 1 (writable).
+ *                          Also used to assign preference in multi-master mode.
+ * dataset       (optional) Name of dataset. Default is 'global'.
+ * timeout       (optional) Seconds to wait for TCP responsiveness. Default is 0.2
+ * lag_threshold (optional) The minimum lag on a slave in seconds before we consider it lagged. 
+ *							Set null to disable. When not set, the value of $wpdb->default_lag_threshold is used.
  */
 
 /**
@@ -92,15 +93,19 @@ $wpdb->check_tcp_responsiveness = true;
  */
 
 /**
- * $wpdb->add_callback( $callback );
+ * $wpdb->add_callback( $callback, $callback_group = 'dataset' );
  *
- * $callback is a callable function or method. It will be called with two
- * arguments and expected to compute a dataset or return null.
- * $dataset = $callback($table, &$wpdb);
+ * $callback is a callable function or method. $callback_group is the
+ * group of callbacks, this $callback belongs to.
  *
  * Callbacks are executed in the order in which they are registered until one
- * of them returns something other than null. Anything evaluating to false will
- * cause the query to be aborted.
+ * of them returns something other than null. 
+ *
+ * The default $callback_group is 'dataset'. Callback in this group 
+ * will be called with two arguments and expected to compute a dataset or return null.
+ * $dataset = $callback($table, &$wpdb);
+ *
+ * Anything evaluating to false will cause the query to be aborted.
  *
  * For more complex setups, the callback may be used to overwrite properties of
  * $wpdb or variables within hyperdb::connect_db(). If a callback returns an
@@ -109,9 +114,8 @@ $wpdb->check_tcp_responsiveness = true;
  * $wpdb->add_database(). It may also include $server, which will be extracted
  * to overwrite the parameters of each randomly selected database server prior
  * to connection. This allows you to dynamically vary parameters such as the
- * host, user, password, database name, and TCP check timeout.
+ * host, user, password, database name, lag_threshold and TCP check timeout.
  */
-
 
 /** Masters and slaves
  *
@@ -130,10 +134,10 @@ $wpdb->check_tcp_responsiveness = true;
  * there are many slaves available and the master is very busy with writes.
  *   'write' => 1,
  *   'read'  => 0,
- * HyperDB accommodates slave replication lag somewhat by keeping track of the
- * tables that it has written since instantiation and sending subsequent read
- * queries to the same server that received the write query. Thus a master set
- * up this way will still receive read queries, but only subsequent to writes.
+ * HyperDB tracks the tables that it has written since instantiation and sending 
+ * subsequent read queries to the same server that received the write query. 
+ * Thus a master set up this way will still receive read queries, but only 
+ * subsequent to writes.
  */
 
 
@@ -172,6 +176,34 @@ $wpdb->check_tcp_responsiveness = true;
  * appears later in this file using the legacy function add_db_server().
  */
 
+/**
+ * Slaves lag awareness 
+ *
+ * HyperDB accommodates slave lag by making decisions, based on the defined lag 
+ * threshold. If the lag threshold is not set, it will ignore the slave lag.
+ * Otherwise, it will try to find a non-lagged slave, before connecting to a lagged one.
+ *
+ * A slave is considered lagged, if it's replication lag is bigger than the lag threshold
+ * you have defined in $wpdb->$default_lag_threshold or in the per-database settings, using 
+ * add_database(). You can also rewrite the lag threshold, by returning 
+ * $server['lag_threshold'] variable with the 'dataset' group callbacks.
+ *
+ * HyperDB does not check the lag on the slaves. You have to define two callbacks 
+ * callbacks to do that:
+ *
+ * $wpdb->add_callback( $callback, 'get_lag_cache' );
+ *
+ * and
+ *
+ * $wpdb->add_callback( $callback, 'get_lag' );
+ *
+ * The first one is called, before connecting to a slave and should return
+ * the replication lag in seconds or false, if unknown, based on $wpdb->lag_cache_key.
+ *
+ * The second callback is called after a connection to a slave is established. 
+ * It should return it's replication lag or false, if unknown, 
+ * based on the connection in $wpdb->dbhs[ $wpdb->dbhname ].
+ */ 
 
 /** Sample Configuration 1: Using the Default Server **/
 /** NOTE: THIS IS ACTIVE BY DEFAULT. COMMENT IT OUT. **/
@@ -284,6 +316,72 @@ function add_db_server($dataset, $part, $dc, $read, $write, $host, $lhost, $name
 		$wpdb->add_database( $database );
 	}
 }
+*/
+
+/**
+ * Sample replication lag detection configuration.
+ *
+ * We use mk-heartbeat (http://www.maatkit.org/doc/mk-heartbeat.html) 
+ * to detect replication lag.
+ *
+ * This implementation requires the database user 
+ * to have read access to the heartbeat table.
+ *
+ * The cache uses shared memory for portability.
+ * Can be modified to work with Memcached, APC and etc.
+ */
+
+/*
+ 
+$wpdb->lag_cache_ttl = 30;
+$wpdb->shmem_key = ftok( __FILE__, "Y" );
+$wpdb->shmem_size = 128 * 1024;
+
+$wpdb->add_callback( 'get_lag_cache', 'get_lag_cache' );
+$wpdb->add_callback( 'get_lag',       'get_lag' );
+
+function get_lag_cache( $wpdb ) {
+	$segment = shm_attach( $wpdb->shmem_key, $wpdb->shmem_size, 0600 );
+	$lag_data = @shm_get_var( $segment, 0 );
+	shm_detach( $segment );
+
+	if ( !is_array( $lag_data ) || !is_array( $lag_data[ $wpdb->lag_cache_key ] ) )
+		return false;
+
+	if ( $wpdb->lag_cache_ttl < time() - $lag_data[ $wpdb->lag_cache_key ][ 'timestamp' ] )
+		return false;
+
+	return $lag_data[ $wpdb->lag_cache_key ][ 'lag' ];
+}
+
+function get_lag( $wpdb ) {
+	$dbh = $wpdb->dbhs[ $wpdb->dbhname ];
+
+	if ( !mysql_select_db( 'heartbeat', $dbh ) )
+		return false;
+
+	$result = mysql_query( "SELECT UNIX_TIMESTAMP() - UNIX_TIMESTAMP(ts) AS lag FROM heartbeat LIMIT 1", $dbh );
+
+	if ( !$result || false === $row = mysql_fetch_assoc( $result ) )
+		return false;
+
+	// Cache the result in shared memory with timestamp 
+	$sem_id = sem_get( $wpdb->shmem_key, 1, 0600, 1 ) ;
+	sem_acquire( $sem_id );
+	$segment = shm_attach( $wpdb->shmem_key, $wpdb->shmem_size, 0600 );
+	$lag_data = @shm_get_var( $segment, 0 );
+	
+	if ( !is_array( $lag_data ) )
+		$lag_data = array();
+
+	$lag_data[ $wpdb->lag_cache_key ] = array( 'timestamp' => time(), 'lag' => $row[ 'lag' ] );
+	shm_put_var( $segment, 0, $lag_data );
+	shm_detach( $segment );
+	sem_release( $sem_id );
+
+	return $row[ 'lag' ];
+}
+
 */
 
 // The ending PHP tag is omitted. This is actually safer than including it.

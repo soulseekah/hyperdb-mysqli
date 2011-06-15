@@ -32,6 +32,13 @@ if ( defined('DB_CONFIG_FILE') && file_exists( DB_CONFIG_FILE ) ) {
 
 }
 
+/**
+ * Common definitions 
+ */
+define( 'HYPERDB_LAG_OK', 1 );
+define( 'HYPERDB_LAG_BEHIND', 2 );
+define( 'HYPERDB_LAG_UNKNOWN', 3 );
+
 class hyperdb extends wpdb {
 	/**
 	 * The last table that was queried
@@ -154,6 +161,12 @@ class hyperdb extends wpdb {
 	var $save_backtrace = true;
 
 	/**
+	 * Maximum lag in seconds. Set null to disable. Requires callbacks.
+	 * @var integer
+	 */
+	var $default_lag_threshold = null;
+
+	/**
 	 * Triggers __construct() for backwards compatibility with PHP4
 	 */
 	function hyperdb( $args = null ) {
@@ -200,6 +213,7 @@ class hyperdb extends wpdb {
 		isset($read)    or $read = 1;
 		isset($write)   or $write = 1;
 		unset($db['dataset']);
+
 		if ( $read )
 			$this->hyper_servers[ $dataset ][ 'read' ][ $read ][] = $db;
 		if ( $write )
@@ -214,10 +228,12 @@ class hyperdb extends wpdb {
 	}
 
 	/**
-	 * Add a callback to examine queries and determine dataset.
+	 * Add a callback to a group of callbacks.
+	 * The default group is 'dataset', used to examine 
+	 * queries and determine dataset.
 	 */
-	function add_callback( $callback ) {
-		$this->hyper_callbacks[] = $callback;
+	function add_callback( $callback, $group = 'dataset' ) {
+		$this->hyper_callbacks[ $group ][] = $callback;
 	}
 
 	/**
@@ -293,12 +309,22 @@ class hyperdb extends wpdb {
 	}
 
 	/**
-	 * Callbacks are specified in the config. They must return a dataset
-	 * or an associative array with an element called 'dataset'.
+	 * Callbacks are executed in the order in which they are registered until one
+	 * of them returns something other than null.
 	 */
-	function run_callbacks( $query ) {
-		$args = array($query, &$this);
-		foreach ( $this->hyper_callbacks as $func ) {
+	function run_callbacks( $group, $args = null) {
+		if ( !is_array( $this->hyper_callbacks[ $group ] ) )
+			return null;
+
+		if ( !isset($args) ) {
+			$args = array( &$this );
+		} elseif ( is_array( $args ) ) {
+			$args[] = &$this;
+		} else {
+			$args = array( $args, &$this );
+		}
+
+		foreach ( $this->hyper_callbacks[ $group ] as $func ) {
 			$result = call_user_func_array($func, $args);
 			if ( isset($result) )
 				return $result;
@@ -343,7 +369,7 @@ class hyperdb extends wpdb {
 		if ( isset($this->hyper_tables[$this->table]) ) {
 			$dataset = $this->hyper_tables[$this->table];
 			$this->callback_result = null;
-		} elseif ( null !== $this->callback_result = $this->run_callbacks($query) ) {
+		} elseif ( null !== $this->callback_result = $this->run_callbacks( 'dataset', $query ) ) {
 			if ( is_array($this->callback_result) )
 				extract( $this->callback_result, EXTR_OVERWRITE );
 			else
@@ -445,89 +471,172 @@ class hyperdb extends wpdb {
 			foreach ( $this->hyper_servers[$dataset][$operation] as $group => $items ) {
 				$keys = array_keys($items);
 				shuffle($keys);
-				foreach ( $keys as $key ) {
+				foreach ( $keys as $key ) 
 					$servers[] = compact('group', 'key');
-				}
 			}
-			$tries_remaining = count($servers);
-			if ( !$tries_remaining )
+
+			if ( !$tries_remaining = count( $servers ) ) 
 				return $this->bail("No database servers were found to match the query. ($this->table, $dataset)");
+			
+			if ( !isset( $unique_servers ) )
+				$unique_servers = $tries_remaining;
+
 		} while ( $tries_remaining < $this->min_tries );
 
 		// Connect to a database server
-		foreach ( $servers as $group_key ) {
-			--$tries_remaining;
+		do {
+			$unique_lagged_slaves = array();
+			$success = false;
 
-			// $group, $key
-			extract($group_key, EXTR_OVERWRITE);
+			foreach ( $servers as $group_key ) {
+				--$tries_remaining;	
+	
+				// If all servers are lagged, we need to start ignoring the lag and retry
+				if ( count( $unique_lagged_slaves ) == $unique_servers )
+					break;
 
-			// $host, $user, $password, $name, $read, $write [ $connect_function, $timeout ]
-			extract($this->hyper_servers[$dataset][$operation][$group][$key], EXTR_OVERWRITE);
+				// $group, $key
+				extract($group_key, EXTR_OVERWRITE);
 
-			list($host, $port) = explode(':', $host);
+				// $host, $user, $password, $name, $read, $write [, $lag_threshold, $connect_function, $timeout ]
+				extract($this->hyper_servers[$dataset][$operation][$group][$key], EXTR_OVERWRITE);
 
-			// Split host:port into $host and $port
-			if ( strpos($host, ':') )
 				list($host, $port) = explode(':', $host);
 
-			// Overlay $server if it was extracted from a callback
-			if ( isset($server) && is_array($server) )
-				extract($server, EXTR_OVERWRITE);
+				// Split host:port into $host and $port
+				if ( strpos($host, ':') )
+					list($host, $port) = explode(':', $host);
 
-			// Split again in case $server had host:port
-			if ( strpos($host, ':') )
-				list($host, $port) = explode(':', $host);
+				// Overlay $server if it was extracted from a callback
+				if ( isset($server) && is_array($server) )
+					extract($server, EXTR_OVERWRITE);
 
-			// Make sure there's always a port number
-			if ( empty($port) )
-				$port = 3306;
+				// Split again in case $server had host:port
+				if ( strpos($host, ':') )
+					list($host, $port) = explode(':', $host);
 
-			// Use a default timeout of 200ms
-			if ( !isset($timeout) )
-				$timeout = 0.2;
+				// Make sure there's always a port number
+				if ( empty($port) )
+					$port = 3306;
 
-			$this->timer_start();
+				// Use a default timeout of 200ms
+				if ( !isset($timeout) )
+					$timeout = 0.2;
 
-			// Connect if necessary or possible
-			$tcp = null;
-			if ( $use_master || !$tries_remaining || !$this->check_tcp_responsiveness || true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) ) {
-				$this->dbhs[$dbhname] = @ $connect_function( "$host:$port", $user, $password, true );
-			} else {
-				$this->dbhs[$dbhname] = false;
-			}
+				// Get the minimum group here, in case $server rewrites it
+				if ( !isset( $min_group ) || $min_group > $group )
+					$min_group = $group;
 
-			$elapsed = $this->timer_stop();
+				// Can be used by the lag callbacks
+				$this->lag_cache_key = "$host:$port";
+				$this->lag_threshold = isset($lag_threshold) ? $lag_threshold : $this->default_lag_threshold;
 
-			if ( is_resource($this->dbhs[$dbhname]) && mysql_select_db( $name, $this->dbhs[$dbhname] ) ) {
-				$success = true;
-				$this->current_host = "$host:$port";
-				$this->dbh2host[$dbhname] = "$host:$port";
-				$queries = 1;
-				$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success', 'queries');
-				$this->db_connections[] = $this->last_connection;
-				$this->open_connections[] = $dbhname;
-				break;
-			} else {
+				// Check for a lagged slave, if applicable
+				if ( !$use_master && !$write && !isset( $ignore_slave_lag )
+					&& isset($this->lag_threshold) && !isset( $server['host'] )
+					&& ( $lagged_status = $this->get_lag_cache() ) === HYPERDB_LAG_BEHIND
+				) {
+					// If it is the last lagged slave and it is with the best preference we will ignore its lag
+					if ( !isset( $unique_lagged_slaves[ "$host:$port" ] )
+						&& $unique_servers == count( $unique_lagged_slaves ) + 1
+						&& $group == $min_group )
+					{
+						$this->lag_threshold = null;
+					} else {
+						$unique_lagged_slaves["$host.$port"] = $this->lag;
+						continue;
+					}
+				}
+
+				$this->timer_start();
+
+				// Connect if necessary or possible
+				$tcp = null;
+				if ( $use_master || !$tries_remaining || !$this->check_tcp_responsiveness
+					|| true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) )
+				{
+					$this->dbhs[$dbhname] = @ $connect_function( "$host:$port", $user, $password, true );	
+				} else {
+					$this->dbhs[$dbhname] = false;
+				}
+
+				$elapsed = $this->timer_stop();
+
+				if ( is_resource( $this->dbhs[$dbhname] ) ) {
+					/**
+					 * If we care about lag, disconnect lagged slaves and try to find others.
+					 * We don't disconnect if it is the last lagged slave and it is with the best preference.
+					 */
+					if ( !$use_master && !$write && !isset( $ignore_slave_lag )
+						&& isset($this->lag_threshold) && !isset( $server['host'] )
+						&& $lagged_status !== HYPERDB_LAG_OK
+						&& ( $lagged_status = $this->get_lag() ) === HYPERDB_LAG_BEHIND
+						&& !(
+							!isset( $unique_lagged_slaves[ "$host:$port" ] )
+							&& $unique_servers == count( $unique_lagged_slaves ) + 1
+							&& $group == $min_group
+						)
+					) {
+						$success = false;
+						$unique_lagged_slaves["$host:$port"] = $this->lag;
+						$this->disconnect( $dbhname );
+						$this->dbhs[$dbhname] = false;
+						$msg = "Replication lag of {$this->lag}s on $host:$port ($dbhname)";
+						$this->print_error( $msg );
+						continue;
+					} elseif ( mysql_select_db( $name, $this->dbhs[ $dbhname ] ) ) {
+						$success = true;
+						$this->current_host = "$host:$port";
+						$this->dbh2host[$dbhname] = "$host:$port";
+						$queries = 1;
+						$lag = isset( $this->lag ) ? $this->lag : 0;
+						$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success', 'querie
+s', 'lag');
+						$this->db_connections[] = $this->last_connection;
+						$this->open_connections[] = $dbhname;
+						break;
+					}
+				}
+
 				$success = false;
 				$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success');
 				$this->db_connections[] = $this->last_connection;
-				$error_details = array (
-					'referrer' => "{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}",
-					'server' => $server,
-					'host' => $host,
-					'error' => mysql_error(),
-					'errno' => mysql_errno(),
-					'tcp_responsive' => $tcp === true ? 'true' : $tcp,
-				);
-				$msg = date( "Y-m-d H:i:s" ) . " Can't select $dbhname - ";
-				$msg .= "\n" . print_r($error_details, true);
+
+				$msg = date( "Y-m-d H:i:s" ) . " Can't select $dbhname - \n";
+				$msg .= "'referrer' => '{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}',\n";
+				$msg .= "'server' => {$server},\n";
+				$msg .= "'host' => {$host},\n";
+				$msg .= "'error' => " . mysql_error() . ",\n";
+				$msg .= "'errno' => " . mysql_errno() . ",\n";
+				$msg .= "'tcp_responsive' => " . ( $tcp === true ? 'true' : $tcp ) . ",\n";
+				$msg .= "'lagged_status' => " . ( isset( $lagged_status ) ? $lagged_status : HYPERDB_LAG_UNKNOWN );
 
 				$this->print_error( $msg );
 			}
-		}
 
-		if ( ! is_resource( $this->dbhs[$dbhname] ) )
-			return $this->bail("Unable to connect to $host:$port to $operation table '$this->table' ($dataset)");
+			if ( !$success || !isset($this->dbhs[$dbhname]) || !is_resource( $this->dbhs[$dbhname] ) ) {
+				if ( !isset( $ignore_slave_lag ) && count( $unique_lagged_slaves ) ) { 
+					// Lagged slaves were not used. Ignore the lag for this connection attempt and retry.
+					$ignore_slave_lag = true;
+					$tries_remaining = count( $servers );
+					continue;
+				}
+				
+				$error_details = array(
+					'host' => $host,
+					'port' => $port,
+					'operation' => $operation,
+					'table' => $this->table,
+					'dataset' => $dataset,
+					'dbhname' => $dbhname
+				);
+				$this->run_callbacks( 'db_connection_error', $error_details );
+
+				return $this->bail( "Unable to connect to $host:$port to $operation table '$this->table' ($dataset)" );
+			}
+
+			break;
+		} while ( true );
 
 		$this->set_charset($this->dbhs[$dbhname], $charset, $collate);
 
@@ -797,7 +906,29 @@ class hyperdb extends wpdb {
 		if ( $socket === false )
 			return "[ > $float_timeout ] ($errno) '$errstr'";
 		fclose($socket);
-	    return true;
+		return true;
+	}
+
+	function get_lag_cache() {
+		$this->lag = $this->run_callbacks( 'get_lag_cache' );
+
+		return $this->check_lag();
+	}
+
+	function get_lag() {
+		$this->lag = $this->run_callbacks( 'get_lag' );
+
+		return $this->check_lag();
+	}
+
+	function check_lag() {
+		if ( $this->lag === false )
+			return HYPERDB_LAG_UNKNOWN;
+
+		if ( $this->lag > $this->lag_threshold )
+			return HYPERDB_LAG_BEHIND;
+
+		return HYPERDB_LAG_OK;
 	}
 
 	// Helper functions for configuration
