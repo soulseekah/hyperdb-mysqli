@@ -60,7 +60,7 @@ Failover describes how HyperDB deals with connection failures. When HyperDB fail
 
 = How does HyperDB support partitioning? =
 
-HyperDB allows tables to be placed in arbitrary databases. It can use callbacks you write to compute the appropriate database for a given query. Thus you can partition your site's data according to your own scheme and configure HyperDB accordingly.
+HyperDB allows tables to be placed in arbitrary databases. It  can use callbacks you write to compute the appropriate database for a given query. Thus you can partition your site's data according to your own scheme and configure HyperDB accordingly.
 
 = Is there any advantage to using HyperDB with just one database server? =
 
