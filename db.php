@@ -537,13 +537,13 @@ class hyperdb extends wpdb {
 					&& ( $lagged_status = $this->get_lag_cache() ) === HYPERDB_LAG_BEHIND
 				) {
 					// If it is the last lagged slave and it is with the best preference we will ignore its lag
-					if ( !isset( $unique_lagged_slaves[ "$host:$port" ] )
+					if ( !isset( $unique_lagged_slaves["$host:$port"] )
 						&& $unique_servers == count( $unique_lagged_slaves ) + 1
 						&& $group == $min_group )
 					{
 						$this->lag_threshold = null;
 					} else {
-						$unique_lagged_slaves["$host.$port"] = $this->lag;
+						$unique_lagged_slaves["$host:$port"] = $this->lag;
 						continue;
 					}
 				}
@@ -572,7 +572,7 @@ class hyperdb extends wpdb {
 						&& $lagged_status !== HYPERDB_LAG_OK
 						&& ( $lagged_status = $this->get_lag() ) === HYPERDB_LAG_BEHIND
 						&& !(
-							!isset( $unique_lagged_slaves[ "$host:$port" ] )
+							!isset( $unique_lagged_slaves["$host:$port"] )
 							&& $unique_servers == count( $unique_lagged_slaves ) + 1
 							&& $group == $min_group
 						)
