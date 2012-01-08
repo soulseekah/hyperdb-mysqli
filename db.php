@@ -313,7 +313,7 @@ class hyperdb extends wpdb {
 	 * of them returns something other than null.
 	 */
 	function run_callbacks( $group, $args = null) {
-		if ( !is_array( $this->hyper_callbacks[ $group ] ) )
+		if ( !isset( $this->hyper_callbacks[ $group ] ) || !is_array( $this->hyper_callbacks[ $group ] ) )
 			return null;
 
 		if ( !isset($args) ) {
@@ -385,7 +385,7 @@ class hyperdb extends wpdb {
 			$this->dataset = $dataset;
 
 		// Determine whether the query must be sent to the master (a writable server)
-		if ( $use_master || $this->srtm === true || isset($this->srtm[$this->table]) ) {
+		if ( !empty( $use_master ) || $this->srtm === true || isset($this->srtm[$this->table]) ) {
 			$use_master = true;
 		} elseif ( $is_write = $this->is_write_query($query) ) {
 			$use_master = true;
@@ -411,7 +411,7 @@ class hyperdb extends wpdb {
 		}
 
 		// Try to reuse an existing connection
-		while ( is_resource($this->dbhs[$dbhname]) ) {
+		while ( isset( $this->dbhs[$dbhname] ) && is_resource($this->dbhs[$dbhname]) ) {
 			// Find the connection for incrementing counters
 			foreach ( array_keys($this->db_connections) as $i )
 				if ( $this->db_connections[$i]['dbhname'] == $dbhname )
@@ -423,7 +423,11 @@ class hyperdb extends wpdb {
 				if ( $name != $this->used_servers[$dbhname]['name'] ) {
 					if ( !mysql_select_db($name, $this->dbhs[$dbhname]) ) {
 						// this can happen when the user varies and lacks permission on the $name database
-						++$conn['disconnect (select failed)'];
+						if ( isset( $conn['disconnect (select failed)'] ) )
+							++$conn['disconnect (select failed)'];
+						else
+							$conn['disconnect (select failed)'] = 1;
+
 						$this->disconnect($dbhname);
 						break;
 					}
@@ -445,17 +449,24 @@ class hyperdb extends wpdb {
 			$this->last_connection = compact('dbhname', 'name');
 
 			if ( !mysql_ping($this->dbhs[$dbhname]) ) {
-				++$conn['disconnect (ping failed)'];
+				if ( isset( $conn['disconnect (ping failed)'] ) )
+					++$conn['disconnect (ping failed)'];
+				else
+					$conn['disconnect (ping failed)'] = 1;
+
 				$this->disconnect($dbhname);
 				break;
 			}
 
-			++$conn['queries'];
+			if ( isset( $conn['queries'] ) ) 
+				++$conn['queries'];
+			else
+				$conn['queries'] = 1;
 
 			return $this->dbhs[$dbhname];
 		}
 
-		if ( $this->write && defined( "MASTER_DB_DEAD" ) ) {
+		if ( !empty( $this->write ) && defined( "MASTER_DB_DEAD" ) ) {
 			return $this->bail("We're updating the database, please try back in 5 minutes. If you are posting to your blog please hit the refresh button on your browser in a few minutes to post the data again. It will be posted as soon as the database is back online again.");
 		}
 
@@ -500,8 +511,7 @@ class hyperdb extends wpdb {
 
 				// $host, $user, $password, $name, $read, $write [, $lag_threshold, $connect_function, $timeout ]
 				extract($this->hyper_servers[$dataset][$operation][$group][$key], EXTR_OVERWRITE);
-
-				list($host, $port) = explode(':', $host);
+				$port = null;
 
 				// Split host:port into $host and $port
 				if ( strpos($host, ':') )
@@ -590,8 +600,7 @@ class hyperdb extends wpdb {
 						$this->dbh2host[$dbhname] = "$host:$port";
 						$queries = 1;
 						$lag = isset( $this->lag ) ? $this->lag : 0;
-						$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success', 'querie
-s', 'lag');
+						$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success', 'queries', 'lag');
 						$this->db_connections[] = $this->last_connection;
 						$this->open_connections[] = $dbhname;
 						break;
@@ -637,6 +646,12 @@ s', 'lag');
 
 			break;
 		} while ( true );
+
+		if ( !isset( $charset ) ) 
+			$charset = null;
+
+		if ( !isset( $collate ) )
+			$collate = null;
 
 		$this->set_charset($this->dbhs[$dbhname], $charset, $collate);
 
