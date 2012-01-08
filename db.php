@@ -245,7 +245,7 @@ class hyperdb extends wpdb {
 		// Remove characters that can legally trail the table name
 		$q = rtrim($q, ';/-#');
 		// allow (select...) union [...] style queries. Use the first queries table name.
-		$q = ltrim($q, "\t ("); 
+		$q = ltrim($q, "\t (");
 
 		// Quickly match most common queries
 		if ( preg_match('/^\s*(?:'
@@ -412,7 +412,7 @@ class hyperdb extends wpdb {
 		}
 
 		// Try to reuse an existing connection
-		while ( isset( $this->dbhs[$dbhname] ) && is_resource($this->dbhs[$dbhname]) ) {
+		while ( isset( $this->dbhs[$dbhname] ) && is_resource( $this->dbhs[$dbhname] ) ) {
 			// Find the connection for incrementing counters
 			foreach ( array_keys($this->db_connections) as $i )
 				if ( $this->db_connections[$i]['dbhname'] == $dbhname )
@@ -467,7 +467,7 @@ class hyperdb extends wpdb {
 			return $this->dbhs[$dbhname];
 		}
 
-		if ( !empty( $this->write ) && defined( "MASTER_DB_DEAD" ) ) {
+		if ( $use_master && defined( "MASTER_DB_DEAD" ) ) {
 			return $this->bail("We're updating the database, please try back in 5 minutes. If you are posting to your blog please hit the refresh button on your browser in a few minutes to post the data again. It will be posted as soon as the database is back online again.");
 		}
 
@@ -611,7 +611,6 @@ class hyperdb extends wpdb {
 				$success = false;
 				$this->last_connection = compact('dbhname', 'host', 'port', 'user', 'name', 'tcp', 'elapsed', 'success');
 				$this->db_connections[] = $this->last_connection;
-
 				$msg = date( "Y-m-d H:i:s" ) . " Can't select $dbhname - \n";
 				$msg .= "'referrer' => '{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}',\n";
 				$msg .= "'server' => {$server},\n";
@@ -631,7 +630,7 @@ class hyperdb extends wpdb {
 					$tries_remaining = count( $servers );
 					continue;
 				}
-				
+
 				$error_details = array(
 					'host' => $host,
 					'port' => $port,
