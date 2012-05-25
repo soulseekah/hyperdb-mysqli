@@ -394,11 +394,14 @@ class hyperdb extends wpdb {
 				$this->srtm[$this->table] = true;
 		} elseif ( !isset($use_master) && is_array($this->srtm) && !empty($this->srtm) ) {
 			// Detect queries that have a join in the srtm array.
-			$pattern = '/' . implode('|', array_keys($this->srtm)) . '/i';
-			if ( preg_match($pattern, substr($query, 0, 1000)) )
-				$use_master = true;
-			else
-				$use_master = false;
+			$use_master = false;
+			$query_match = substr( $query, 0, 1000 );
+			foreach ( $this->srtm as $key => $value ) {
+				if ( false !== stripos( $query_match, $key ) ) {
+					$use_master = true;
+					break;
+				}
+			}
 		} else {
 			$use_master = false;
 		}
