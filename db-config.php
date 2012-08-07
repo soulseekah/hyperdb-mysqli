@@ -291,8 +291,10 @@ function add_db_server($dataset, $part, $dc, $read, $write, $host, $lhost, $name
 	// trying to connect to local servers before remote servers. Also
 	// increases time allowed for TCP responsiveness check.
 	if ( !empty($dc) && defined(DATACENTER) && $dc != DATACENTER ) {
-		$read += 10000;
-		$write += 10000;
+		if ( $read )
+			$read += 10000;
+		if ( $write ) 
+			$write += 10000;
 		$timeout = 0.7;
 	}
 
