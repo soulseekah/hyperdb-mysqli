@@ -142,6 +142,12 @@ class hyperdb extends wpdb {
 	var $open_connections = array();
 
 	/**
+	 * Lookup array (dbhname => host:port)
+	 * @var array
+	 */
+	var $dbh2host = array();
+
+	/**
 	 * The last server used and the database name selected
 	 * @var array
 	 */
