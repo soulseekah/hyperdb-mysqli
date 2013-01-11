@@ -68,7 +68,7 @@ None that has been measured. HyperDB does at least try again before giving up co
 
 One way HyperDB differs from WPDB is that HyperDB does not attempt to connect to a database until a query is made. Thus a site with sufficiently aggressive persistent caching could remain read-only accessible despite the database becoming unreachable.
 
-= What if all database servers for a dataset go down?
+= What if all database servers for a dataset go down? =
 
 Since HyperDB attempts a connection only when a query is made, your WordPress installation will not kill the site with a database error, but will let the code decide what to do next on an unsuccessful query. If you want to do something different, like setting a custom error page or kill the site, you need to define the 'db_connection_error' callback in your db-config.php.
 
