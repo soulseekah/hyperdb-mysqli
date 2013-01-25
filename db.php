@@ -343,7 +343,7 @@ class hyperdb extends wpdb {
 	 * @param string query
 	 * @return resource mysql database connection
 	 */
-	function &db_connect( $query = '' ) {
+	function db_connect( $query = '' ) {
 		$connect_function = $this->persistent ? 'mysql_pconnect' : 'mysql_connect';
 		if ( empty( $this->hyper_servers ) ) {
 			if ( is_resource( $this->dbh ) )
