@@ -173,13 +173,6 @@ class hyperdb extends wpdb {
 	var $default_lag_threshold = null;
 
 	/**
-	 * Triggers __construct() for backwards compatibility with PHP4
-	 */
-	function hyperdb( $args = null ) {
-		return $this->__construct($args);
-	}
-
-	/**
 	 * Gets ready to make database connections
 	 * @param array db class vars
 	 */
@@ -192,6 +185,13 @@ class hyperdb extends wpdb {
 		$this->init_charset();
 	}
 
+	/**
+	 * Triggers __construct() for backwards compatibility with PHP4
+	 */
+	function hyperdb( $args = null ) {
+		return $this->__construct($args);
+	}
+	
 	/**
 	 * Sets $this->charset and $this->collate
 	 */
