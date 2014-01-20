@@ -360,11 +360,10 @@ class hyperdb extends wpdb {
 			if ( ! mysql_select_db(DB_NAME, $this->dbh) )
 				return $this->bail("We were unable to select the database.");
 			if ( ! empty( $this->charset ) ) {
-				$collation_query = "SET NAMES '$this->charset'";
-				if ( !empty( $this->collate ) )
-					$collation_query .= " COLLATE '$this->collate'";
-				mysql_query($collation_query, $this->dbh);
+				$_collate = ! empty( $this->collate ) ? $this->collate : null;
+				$this->set_charset( $this->dbh, $this->charset, $_collate );
 			}
+
 			return $this->dbh;
 		}
 
@@ -679,6 +678,18 @@ class hyperdb extends wpdb {
 		return $this->dbhs[$dbhname];
 	}
 
+
+	/*
+ 	 * Force addslashes() for the escapes.
+ 	 *
+ 	 * HyperDB makes connections when a query is made
+ 	 * which is why we can't use mysql_real_escape_string() for escapes.
+ 	 * This is also the reason why we don't allow certain charsets. See set_charset().
+ 	 */
+    function _real_escape( $string ) {
+		return addslashes( $string );
+	}
+
 	/**
 	 * Sets the connection's character set.
 	 * @param resource $dbh     The resource given by mysql_connect
@@ -686,10 +697,17 @@ class hyperdb extends wpdb {
 	 * @param string   $collate The collation (optional)
 	 */
 	function set_charset($dbh, $charset = null, $collate = null) {
-		if ( !isset($charset) )
+		if ( ! isset( $charset ) )
 			$charset = $this->charset;
-		if ( !isset($collate) )
+		if ( ! isset( $collate ) )
 			$collate = $this->collate;
+
+		if ( in_array( strtolower( $charset ), array( 'big5', 'gbk' ) ) )
+			wp_die( "$charset charset isn't supported in HyperDB for security reasons" );
+		if ( false !== stripos( $collate, 'big5' ) || false !== stripos( $collate, 'gbk' ) )
+			wp_die( "$collation collation isn't supported in HyperDB for security reasons" );
+
+
 		if ( $this->has_cap( 'collation', $dbh ) && !empty( $charset ) ) {
 			if ( function_exists( 'mysql_set_charset' ) && $this->has_cap( 'set_charset', $dbh ) ) {
 				mysql_set_charset( $charset, $dbh );
