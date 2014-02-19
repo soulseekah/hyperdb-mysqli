@@ -702,11 +702,8 @@ class hyperdb extends wpdb {
 		if ( ! isset( $collate ) )
 			$collate = $this->collate;
 
-		if ( in_array( strtolower( $charset ), array( 'big5', 'gbk' ) ) )
+		if ( ! in_array( strtolower( $charset ), array( 'utf8', 'latin1' ) ) )
 			wp_die( "$charset charset isn't supported in HyperDB for security reasons" );
-		if ( false !== stripos( $collate, 'big5' ) || false !== stripos( $collate, 'gbk' ) )
-			wp_die( "$collation collation isn't supported in HyperDB for security reasons" );
-
 
 		if ( $this->has_cap( 'collation', $dbh ) && !empty( $charset ) ) {
 			if ( function_exists( 'mysql_set_charset' ) && $this->has_cap( 'set_charset', $dbh ) ) {
