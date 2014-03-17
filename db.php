@@ -345,6 +345,32 @@ class hyperdb extends wpdb {
 	 */
 	function db_connect( $query = '' ) {
 		$connect_function = $this->persistent ? 'mysql_pconnect' : 'mysql_connect';
+		
+		if ( empty( $query ) )
+			return false;
+
+		$this->last_table = $this->table = $this->get_table_from_query($query);
+
+		if ( isset($this->hyper_tables[$this->table]) ) {
+			$dataset = $this->hyper_tables[$this->table];
+			$this->callback_result = null;
+		} elseif ( null !== $this->callback_result = $this->run_callbacks( 'dataset', $query ) ) {
+			if ( is_array($this->callback_result) )
+				extract( $this->callback_result, EXTR_OVERWRITE );
+			else
+				$dataset = $this->callback_result;
+		}
+
+		if ( ! isset($dataset) )
+			$dataset = 'global';
+
+		if ( ! $dataset )
+			return $this->bail("Unable to determine which dataset to query. ($this->table)");
+		else
+			$this->dataset = $dataset;
+
+		$this->run_callbacks( 'dataset_found', $dataset );
+
 		if ( empty( $this->hyper_servers ) ) {
 			if ( is_resource( $this->dbh ) )
 				return $this->dbh;
@@ -366,29 +392,6 @@ class hyperdb extends wpdb {
 
 			return $this->dbh;
 		}
-
-		if ( empty( $query ) )
-			return false;
-
-		$this->last_table = $this->table = $this->get_table_from_query($query);
-
-		if ( isset($this->hyper_tables[$this->table]) ) {
-			$dataset = $this->hyper_tables[$this->table];
-			$this->callback_result = null;
-		} elseif ( null !== $this->callback_result = $this->run_callbacks( 'dataset', $query ) ) {
-			if ( is_array($this->callback_result) )
-				extract( $this->callback_result, EXTR_OVERWRITE );
-			else
-				$dataset = $this->callback_result;
-		}
-
-		if ( !isset($dataset) )
-			$dataset = 'global';
-
-		if ( !$dataset )
-			return $this->bail("Unable to determine which dataset to query. ($this->table)");
-		else
-			$this->dataset = $dataset;
 
 		// Determine whether the query must be sent to the master (a writable server)
 		if ( !empty( $use_master ) || $this->srtm === true || isset($this->srtm[$this->table]) ) {
