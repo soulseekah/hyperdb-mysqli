@@ -260,7 +260,7 @@ class hyperdb extends wpdb {
 				. '|REPLACE(?:\s+INTO)?'
 				. '|UPDATE(?:\s+IGNORE)?'
 				. '|DELETE(?:\s+IGNORE)?(?:\s+FROM)?'
-				. ')\s+`?(\w+)`?/is', $q, $maybe) )
+				. ')\s+`?([\w-]+)`?/is', $q, $maybe) )
 			return $maybe[1];
 
 		// Refer to the previous query
@@ -271,7 +271,7 @@ class hyperdb extends wpdb {
 		if ( preg_match('/^\s*(?:'
 				. 'SHOW\s+TABLE\s+STATUS.+(?:LIKE\s+|WHERE\s+Name\s*=\s*)'
 				. '|SHOW\s+(?:FULL\s+)?TABLES.+(?:LIKE\s+|WHERE\s+Name\s*=\s*)'
-				. ')\W(\w+)\W/is', $q, $maybe) )
+				. ')\W([\w-]+)\W/is', $q, $maybe) )
 			return $maybe[1];
 
 		// Big pattern for the rest of the table-related queries in MySQL 5.0
@@ -293,7 +293,7 @@ class hyperdb extends wpdb {
 				. '|LOAD\s+DATA.*INFILE.*INTO\s+TABLE'
 				. '|(?:GRANT|REVOKE).*ON\s+TABLE'
 				. '|SHOW\s+(?:.*FROM|.*TABLE)'
-				. ')\s+`?(\w+)`?/is', $q, $maybe) )
+				. ')\s+`?([\w-]+)`?/is', $q, $maybe) )
 			return $maybe[1];
 	}
 
