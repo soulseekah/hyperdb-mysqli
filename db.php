@@ -710,7 +710,7 @@ class hyperdb extends wpdb {
 
 		if ( $this->has_cap( 'collation', $dbh ) && !empty( $charset ) ) {
 			if ( function_exists( 'mysqli_set_charset' ) && $this->has_cap( 'set_charset', $dbh ) ) {
-				mysqli_set_charset( $dhb, $charset );
+				mysqli_set_charset( $dbh, $charset );
 				$this->real_escape = true;
 			} else {
 				$query = $this->prepare( 'SET NAMES %s', $charset );
