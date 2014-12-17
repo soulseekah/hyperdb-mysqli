@@ -626,8 +626,10 @@ class hyperdb extends wpdb {
 				$msg .= "'referrer' => '{$_SERVER['HTTP_HOST']}{$_SERVER['REQUEST_URI']}',\n";
 				$msg .= "'server' => {$server},\n";
 				$msg .= "'host' => {$host},\n";
-				$msg .= "'error' => " . mysqli_error( $this->dbh) . ",\n";
-				$msg .= "'errno' => " . mysqli_errno( $this->dbh ) . ",\n";
+				if ( $this->dbh instanceof mysqli ) {
+					$msg .= "'error' => " . mysqli_error( $this->dbh ) . ",\n";
+					$msg .= "'errno' => " . mysqli_errno( $this->dbh ) . ",\n";
+				}
 				$msg .= "'tcp_responsive' => " . ( $tcp === true ? 'true' : $tcp ) . ",\n";
 				$msg .= "'lagged_status' => " . ( isset( $lagged_status ) ? $lagged_status : HYPERDB_LAG_UNKNOWN );
 
