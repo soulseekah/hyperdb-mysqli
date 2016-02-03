@@ -379,7 +379,11 @@ class hyperdb extends wpdb {
 				|| !defined('DB_NAME') )
 				return $this->bail("We were unable to query because there was no database defined.");
 			$persist = $this->persistent ? 'p:' : '';
-			$this->dbh = @mysqli_connect($persist.DB_HOST, DB_USER, DB_PASSWORD);
+			$host_parts = explode( ':', DB_HOST );
+			$host = array_shift( $host_parts );
+			$port = array_shift( $host_parts );
+			$port = $port ? : 3306;
+			$this->dbh = @mysqli_connect($persist.$host, DB_USER, DB_PASSWORD, '', $port);
 			if ( !( $this->dbh instanceof mysqli ) )
 				return $this->bail("We were unable to connect to the database. (DB_HOST)");
 			if ( ! mysqli_select_db( $this->dbh, DB_NAME ) )
@@ -577,7 +581,7 @@ class hyperdb extends wpdb {
 					|| true === $tcp = $this->check_tcp_responsiveness($host, $port, $timeout) )
 				{
 					$persist = $this->persistent ? 'p:' : '';
-					$this->dbhs[$dbhname] = @mysqli_connect( "$persist$host:$port", $user, $password );
+					$this->dbhs[$dbhname] = @mysqli_connect( "$persist$host", $user, $password, '', $port );
 				} else {
 					$this->dbhs[$dbhname] = false;
 				}
