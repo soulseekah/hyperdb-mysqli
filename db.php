@@ -33,7 +33,7 @@ if ( defined('DB_CONFIG_FILE') && file_exists( DB_CONFIG_FILE ) ) {
 }
 
 /**
- * Common definitions 
+ * Common definitions
  */
 define( 'HYPERDB_LAG_OK', 1 );
 define( 'HYPERDB_LAG_BEHIND', 2 );
@@ -173,6 +173,16 @@ class hyperdb extends wpdb {
 	var $default_lag_threshold = null;
 
 	/**
+	 * A list of incompatible SQL modes.
+	 *
+	 * @since 3.9.0
+	 * @access protected
+	 * @var array
+	 */
+	protected $incompatible_modes = array( 'NO_ZERO_DATE', 'ONLY_FULL_GROUP_BY',
+		'STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES', 'TRADITIONAL' );
+
+	/**
 	 * Gets ready to make database connections
 	 * @param array db class vars
 	 */
@@ -191,7 +201,7 @@ class hyperdb extends wpdb {
 	function hyperdb( $args = null ) {
 		return $this->__construct($args);
 	}
-	
+
 	/**
 	 * Sets $this->charset and $this->collate
 	 */
@@ -235,7 +245,7 @@ class hyperdb extends wpdb {
 
 	/**
 	 * Add a callback to a group of callbacks.
-	 * The default group is 'dataset', used to examine 
+	 * The default group is 'dataset', used to examine
 	 * queries and determine dataset.
 	 */
 	function add_callback( $callback, $group = 'dataset' ) {
@@ -473,7 +483,7 @@ class hyperdb extends wpdb {
 				break;
 			}
 
-			if ( isset( $conn['queries'] ) ) 
+			if ( isset( $conn['queries'] ) )
 				++$conn['queries'];
 			else
 				$conn['queries'] = 1;
@@ -497,13 +507,13 @@ class hyperdb extends wpdb {
 			foreach ( $this->hyper_servers[$dataset][$operation] as $group => $items ) {
 				$keys = array_keys($items);
 				shuffle($keys);
-				foreach ( $keys as $key ) 
+				foreach ( $keys as $key )
 					$servers[] = compact('group', 'key');
 			}
 
-			if ( !$tries_remaining = count( $servers ) ) 
+			if ( !$tries_remaining = count( $servers ) )
 				return $this->bail("No database servers were found to match the query. ($this->table, $dataset)");
-			
+
 			if ( !isset( $unique_servers ) )
 				$unique_servers = $tries_remaining;
 
@@ -515,8 +525,8 @@ class hyperdb extends wpdb {
 			$success = false;
 
 			foreach ( $servers as $group_key ) {
-				--$tries_remaining;	
-	
+				--$tries_remaining;
+
 				// If all servers are lagged, we need to start ignoring the lag and retry
 				if ( count( $unique_lagged_slaves ) == $unique_servers )
 					break;
@@ -641,7 +651,7 @@ class hyperdb extends wpdb {
 			}
 
 			if ( !$success || !isset($this->dbhs[$dbhname]) || !( $this->dbhs[$dbhname] instanceof mysqli ) ) {
-				if ( !isset( $ignore_slave_lag ) && count( $unique_lagged_slaves ) ) { 
+				if ( !isset( $ignore_slave_lag ) && count( $unique_lagged_slaves ) ) {
 					// Lagged slaves were not used. Ignore the lag for this connection attempt and retry.
 					$ignore_slave_lag = true;
 					$tries_remaining = count( $servers );
@@ -664,7 +674,7 @@ class hyperdb extends wpdb {
 			break;
 		} while ( true );
 
-		if ( !isset( $charset ) ) 
+		if ( !isset( $charset ) )
 			$charset = null;
 
 		if ( !isset( $collate ) )
@@ -673,6 +683,8 @@ class hyperdb extends wpdb {
 		$this->set_charset($this->dbhs[$dbhname], $charset, $collate);
 
 		$this->dbh = $this->dbhs[$dbhname]; // needed by $wpdb->_real_escape()
+
+		$this->set_sql_mode();
 
 		$this->last_used_server = compact('host', 'user', 'name', 'read', 'write');
 
@@ -725,6 +737,59 @@ class hyperdb extends wpdb {
 				mysqli_query( $dbh, $query );
 			}
 		}
+	}
+
+	/**
+	 * Change the current SQL mode, and ensure its WordPress compatibility.
+	 *
+	 * If no modes are passed, it will ensure the current MySQL server
+	 * modes are compatible.
+	 *
+	 * @since 3.9.0
+	 *
+	 * @param array $modes Optional. A list of SQL modes to set.
+	 */
+	public function set_sql_mode( $modes = array() ) {
+		if ( empty( $modes ) ) {
+			$res = mysqli_query( $this->dbh, 'SELECT @@SESSION.sql_mode' );
+
+			if ( empty( $res ) ) {
+				return;
+			}
+
+			$modes_array = mysqli_fetch_array( $res );
+			if ( empty( $modes_array[0] ) ) {
+				return;
+			}
+			$modes_str = $modes_array[0];
+
+			if ( empty( $modes_str ) ) {
+				return;
+			}
+
+			$modes = explode( ',', $modes_str );
+		}
+
+		$modes = array_change_key_case( $modes, CASE_UPPER );
+
+		/**
+		 * Filters the list of incompatible SQL modes to exclude.
+		 *
+		 * @since 3.9.0
+		 *
+		 * @param array $incompatible_modes An array of incompatible modes.
+		 */
+		$incompatible_modes = (array) apply_filters( 'incompatible_sql_modes', $this->incompatible_modes );
+
+		foreach ( $modes as $i => $mode ) {
+			if ( in_array( $mode, $incompatible_modes ) ) {
+				unset( $modes[ $i ] );
+			}
+		}
+
+		$modes_str = implode( ',', $modes );
+
+		mysqli_query( $this->dbh, "SET SESSION sql_mode='$modes_str'" );
 	}
 
 	/**
@@ -1008,7 +1073,7 @@ class hyperdb extends wpdb {
 	}
 
 	// Helper functions for configuration
-	
+
 } // class hyperdb
 
 $wpdb = new hyperdb();
