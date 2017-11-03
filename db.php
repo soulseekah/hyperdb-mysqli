@@ -707,8 +707,13 @@ class hyperdb extends wpdb {
  	 * which is why we can't use mysqli_real_escape_string() for escapes.
  	 * This is also the reason why we don't allow certain charsets. See set_charset().
  	 */
-    function _real_escape( $string ) {
-		return addslashes( $string );
+	function _real_escape( $string ) {
+		$escaped = addslashes( $string );
+		if ( method_exists( get_parent_class( $this ), 'add_placeholder_escape' ) ) {
+			$escaped = $this->add_placeholder_escape( $escaped );
+		}
+
+		return $escaped;
 	}
 
 	/**
